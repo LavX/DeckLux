@@ -1,0 +1,7 @@
+; Copyright (c) 2026 Laszlo Toth <lavx@lavx.hu>.
+; Licensed under the Microsoft Public License (MS-PL).
+; DeckLuxSensor.def - UMDF driver module definition.
+
+LIBRARY DeckLuxSensor
+
+EXPORTS

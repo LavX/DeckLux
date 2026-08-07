@@ -1,0 +1,64 @@
+; DeckLux - Steam Deck ambient-light sensor driver for Windows
+; Copyright (c) 2026 Laszlo Toth <lavx@lavx.hu>
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Sensor
+ClassGuid   = {5175D334-C371-4806-B3BA-71FD53C9258D}
+Provider    = %ProviderName%
+CatalogFile = DeckLuxSensor.cat
+DriverVer   = 08/07/2026,1.0.0.0
+PnpLockdown = 1
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %MediaDescription%,,,
+
+[SourceDisksFiles]
+DeckLuxSensor.dll = 1,,
+
+[Manufacturer]
+%ManufacturerName% = DeckLux_Devices, NT$ARCH$.10.0...22000
+
+[DeckLux_Devices.NT$ARCH$.10.0...22000]
+%DeckLux_DevDesc% = DeckLux_Install, ACPI\PRP0001
+
+[DeckLux_Install.NT]
+Include   = WUDFRD.inf
+Needs     = WUDFRD.NT
+CopyFiles = DeckLux_CopyFiles
+
+[DeckLux_Install.NT.hw]
+Include = WUDFRD.inf
+Needs   = WUDFRD.NT.HW
+
+[DeckLux_CopyFiles]
+DeckLuxSensor.dll
+
+[DeckLux_Install.NT.Services]
+Include = WUDFRD.inf
+Needs   = WUDFRD.NT.Services
+
+[DeckLux_Install.NT.Wdf]
+UmdfService              = DeckLuxSensor, DeckLux_Service
+UmdfServiceOrder         = DeckLuxSensor
+UmdfDirectHardwareAccess = AllowDirectHardwareAccess
+UmdfHostProcessSharing   = ProcessSharingDisabled
+UmdfFileObjectPolicy     = AllowNullAndUnknownFileObjects
+UmdfFsContextUsePolicy   = CannotUseFsContexts
+
+[DeckLux_Service]
+UmdfLibraryVersion = $UMDFVERSION$
+ServiceBinary      = %13%\DeckLuxSensor.dll
+UmdfExtensions     = SensorsCx0102
+
+[Strings]
+ProviderName     = "DeckLux Project"
+ManufacturerName = "DeckLux Project"
+MediaDescription = "DeckLux Steam Deck ambient-light sensor driver"
+DeckLux_DevDesc  = "DeckLux Ambient Light Sensor"

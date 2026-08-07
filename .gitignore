@@ -1,0 +1,28 @@
+# Visual Studio and WDK build output
+.vs/
+.tools/
+artifacts/
+ARM64/
+Debug/
+Release/
+x64/
+obj/
+*.user
+*.suo
+*.VC.db
+*.binlog
+*.log
+*.tmp
+DeckLux.install-state*.json
+install-state.json
+
+# Driver packages and signing artifacts
+*.cat
+*.cer
+*.pfx
+*.pvk
+*.snk
+
+# Tracing output
+*.etl
+*.tmf
