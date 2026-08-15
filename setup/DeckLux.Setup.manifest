@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Copyright (c) 2026 Laszlo Toth <lavx@lavx.hu>. Licensed under the MS-PL. -->
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-  <assemblyIdentity version="1.0.0.0" name="DeckLux.Setup" />
+  <assemblyIdentity version="1.1.0.0" name="DeckLux.Setup" />
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

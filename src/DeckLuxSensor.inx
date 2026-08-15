@@ -7,7 +7,7 @@ Class       = Sensor
 ClassGuid   = {5175D334-C371-4806-B3BA-71FD53C9258D}
 Provider    = %ProviderName%
 CatalogFile = DeckLuxSensor.cat
-DriverVer   = 08/07/2026,1.0.0.0
+DriverVer   = 08/15/2026,1.1.0.0
 PnpLockdown = 1
 
 [ControlFlags]

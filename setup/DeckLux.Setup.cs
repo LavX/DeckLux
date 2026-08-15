@@ -25,9 +25,9 @@ using Microsoft.Win32;
 [assembly: AssemblyCompany("Laszlo Toth")]
 [assembly: AssemblyProduct("DeckLux")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 Laszlo Toth <lavx@lavx.hu>")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
-[assembly: AssemblyInformationalVersion("1.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyInformationalVersion("1.1.0")]
 [assembly: ComVisible(false)]
 
 namespace DeckLux.Setup
@@ -35,8 +35,8 @@ namespace DeckLux.Setup
     internal static class Product
     {
         internal const string Name = "DeckLux";
-        internal const string Version = "1.0.0";
-        internal const string DriverVersion = "1.0.0.0";
+        internal const string Version = "1.1.0";
+        internal const string DriverVersion = "1.1.0.0";
         internal const string PayloadResource = "DeckLux.Payload.zip";
         internal const string PayloadHashResource = "DeckLux.Payload.sha256";
         internal const string UninstallKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\DeckLux";
@@ -497,7 +497,7 @@ namespace DeckLux.Setup
                     throw new InvalidOperationException(
                         "Installation finished without a verified DeckLux " + Product.DriverVersion + " state.");
                 }
-                ValidatePrimaryOnlyState();
+                ValidateSupportedState();
                 WriteUninstallRegistration();
                 HardenProtectedTree(Product.DataRoot, false);
                 log("DeckLux " + Product.Version + " installation verified.");
@@ -560,7 +560,7 @@ namespace DeckLux.Setup
             }
             if (state.Active)
             {
-                ValidatePrimaryOnlyState();
+                ValidateSupportedState();
                 string scriptPath = Path.Combine(Product.InstallRoot, @"scripts\Uninstall-DeckLux.ps1");
                 if (!File.Exists(scriptPath))
                 {
@@ -662,7 +662,8 @@ namespace DeckLux.Setup
             Version windows = Environment.OSVersion.Version;
             if (windows.Major < 10 || (windows.Major == 10 && windows.Build < 22000))
             {
-                throw new PlatformNotSupportedException("DeckLux 1.0.0 requires Windows 11.");
+                throw new PlatformNotSupportedException(
+                    "DeckLux " + Product.Version + " requires Windows 11.");
             }
         }
 
@@ -763,17 +764,13 @@ namespace DeckLux.Setup
                 throw new UnauthorizedAccessException(
                     "DeckLux refuses data with an inherited or replaceable ACL: " + path);
             }
-            FileSystemRights dangerousRights = FileSystemRights.Write | FileSystemRights.Modify |
-                FileSystemRights.FullControl | FileSystemRights.ChangePermissions |
-                FileSystemRights.TakeOwnership | FileSystemRights.Delete |
-                FileSystemRights.DeleteSubdirectoriesAndFiles;
             AuthorizationRuleCollection rules = security.GetAccessRules(
                 true, true, typeof(SecurityIdentifier));
             foreach (FileSystemAccessRule rule in rules)
             {
                 SecurityIdentifier identity = rule.IdentityReference as SecurityIdentifier;
                 if (rule.AccessControlType == AccessControlType.Allow &&
-                    (rule.FileSystemRights & dangerousRights) != 0 &&
+                    IncludesDangerousFileSystemRights(rule.FileSystemRights) &&
                     (identity == null || (!identity.Equals(system) && !identity.Equals(administrators))))
                 {
                     throw new UnauthorizedAccessException(
@@ -980,13 +977,254 @@ namespace DeckLux.Setup
             return "'" + value.Replace("'", "''") + "'";
         }
 
-        private static void ValidatePrimaryOnlyState()
+        private static void ValidateSupportedState()
         {
             string json = File.ReadAllText(Product.StatePath, Encoding.UTF8);
-            ValidatePrimaryOnlyStateJson(json);
+            ValidateSupportedStateJson(json);
         }
 
-        internal static void ValidatePrimaryOnlyStateJson(string json)
+        internal static void ValidateSupportedStateJson(string json)
+        {
+            Dictionary<string, object> root = DeserializeStateRoot(json);
+            if (!string.Equals(GetStateString(root, "Project"), "DeckLux",
+                StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "The installation state does not identify DeckLux.");
+            }
+
+            object schemaValue;
+            if (!root.TryGetValue("SchemaVersion", out schemaValue) ||
+                !(schemaValue is int))
+            {
+                throw new InvalidDataException(
+                    "DeckLux state has no valid schema version.");
+            }
+            int schemaVersion = (int)schemaValue;
+            if (schemaVersion < 1 || schemaVersion > 3)
+            {
+                throw new InvalidDataException(
+                    "DeckLux state uses an unsupported schema version.");
+            }
+
+            object targetValue;
+            IList targets;
+            if (!root.TryGetValue("Targets", out targetValue) ||
+                (targets = targetValue as IList) == null ||
+                targets.Count < 1 || targets.Count > 2)
+            {
+                throw new InvalidDataException(
+                    "DeckLux state must record one or two supported targets.");
+            }
+
+            object platformValue;
+            bool hasPlatform = root.TryGetValue("Platform", out platformValue);
+            Dictionary<string, object> platform = hasPlatform
+                ? platformValue as Dictionary<string, object>
+                : null;
+            if (hasPlatform && platform == null)
+            {
+                throw new InvalidDataException(
+                    "DeckLux state has an invalid platform record.");
+            }
+            if (schemaVersion == 3 && platform == null)
+            {
+                throw new InvalidDataException(
+                    "DeckLux schema 3 state has no platform record.");
+            }
+
+            ValidateSupportedTargets(
+                targets, schemaVersion, GetStateDeckProduct(platform, schemaVersion));
+        }
+
+        private static Dictionary<string, object> DeserializeStateRoot(string json)
+        {
+            try
+            {
+                JavaScriptSerializer serializer = new JavaScriptSerializer();
+                Dictionary<string, object> root =
+                    serializer.Deserialize<Dictionary<string, object>>(json);
+                if (root == null)
+                {
+                    throw new InvalidDataException("DeckLux state JSON is null.");
+                }
+                return root;
+            }
+            catch (InvalidDataException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidDataException(
+                    "DeckLux state JSON is invalid.", exception);
+            }
+        }
+
+        internal static bool IncludesDangerousFileSystemRights(
+            FileSystemRights rights)
+        {
+            FileSystemRights dangerousRights =
+                FileSystemRights.WriteData |
+                FileSystemRights.AppendData |
+                FileSystemRights.WriteExtendedAttributes |
+                FileSystemRights.WriteAttributes |
+                FileSystemRights.DeleteSubdirectoriesAndFiles |
+                FileSystemRights.Delete |
+                FileSystemRights.ChangePermissions |
+                FileSystemRights.TakeOwnership;
+            return (rights & dangerousRights) != 0;
+        }
+
+        private static string GetStateDeckProduct(
+            Dictionary<string, object> platform,
+            int schemaVersion)
+        {
+            if (platform == null)
+            {
+                return string.Empty;
+            }
+
+            string deckProduct = GetStateString(platform, "DeckProduct");
+            string manufacturer = GetStateString(platform, "SystemManufacturer");
+            string productName = GetStateString(platform, "SystemProductName");
+
+            if (string.IsNullOrEmpty(deckProduct) && schemaVersion < 3 &&
+                string.Equals(manufacturer, "Valve",
+                    StringComparison.OrdinalIgnoreCase) &&
+                (string.Equals(productName, "Jupiter",
+                    StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(productName, "Galileo",
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                deckProduct = productName;
+            }
+
+            if (string.IsNullOrEmpty(deckProduct))
+            {
+                if (schemaVersion == 3)
+                {
+                    throw new InvalidDataException(
+                        "DeckLux schema 3 state has no supported product identity.");
+                }
+                return string.Empty;
+            }
+
+            if (!string.Equals(deckProduct, "Jupiter", StringComparison.Ordinal) &&
+                !string.Equals(deckProduct, "Galileo", StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "DeckLux state identifies an unsupported product.");
+            }
+            if ((!string.IsNullOrEmpty(manufacturer) &&
+                 !string.Equals(manufacturer, "Valve",
+                     StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrEmpty(productName) &&
+                 !string.Equals(productName, deckProduct,
+                     StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidDataException(
+                    "DeckLux state contains contradictory platform identity.");
+            }
+            return deckProduct;
+        }
+
+        private static void ValidateSupportedTargets(
+            IList targets,
+            int schemaVersion,
+            string deckProduct)
+        {
+            Dictionary<string, object> primary =
+                targets[0] as Dictionary<string, object>;
+            if (targets.Count == 2)
+            {
+                Dictionary<string, object> secondary =
+                    targets[1] as Dictionary<string, object>;
+                if (schemaVersion != 3 ||
+                    !string.Equals(deckProduct, "Galileo",
+                        StringComparison.Ordinal) ||
+                    !IsSupportedSensorTarget(primary, "Primary", "LTRF",
+                        "ACPI\\PRP0001\\0") ||
+                    !IsSupportedSensorTarget(secondary, "Secondary", "LTRS",
+                        "ACPI\\PRP0001\\1"))
+                {
+                    throw new InvalidDataException(
+                        "A two-sensor state must contain the canonical Galileo LTRF/LTRS pair.");
+                }
+                return;
+            }
+
+            bool validPrimary;
+            if (string.Equals(deckProduct, "Jupiter", StringComparison.Ordinal))
+            {
+                validPrimary = IsSupportedSensorTarget(
+                    primary, "Primary", "LTRF", "ACPI\\PRP0001\\1");
+            }
+            else if (string.Equals(deckProduct, "Galileo", StringComparison.Ordinal))
+            {
+                validPrimary = IsSupportedSensorTarget(
+                    primary, "Primary", "LTRF", "ACPI\\PRP0001\\0");
+            }
+            else
+            {
+                validPrimary =
+                    IsSupportedSensorTarget(
+                        primary, "Primary", "LTRF", "ACPI\\PRP0001\\0") ||
+                    IsSupportedSensorTarget(
+                        primary, "Primary", "LTRF", "ACPI\\PRP0001\\1");
+            }
+
+            if (!validPrimary)
+            {
+                throw new InvalidDataException(
+                    "DeckLux state does not contain a canonical primary sensor.");
+            }
+        }
+
+        private static bool IsSupportedSensorTarget(
+            Dictionary<string, object> target,
+            string expectedRole,
+            string expectedBiosLeaf,
+            string expectedInstanceId)
+        {
+            return target != null &&
+                string.Equals(GetStateString(target, "Role"), expectedRole,
+                    StringComparison.Ordinal) &&
+                HasBiosLeaf(GetStateString(target, "BiosDeviceName"),
+                    expectedBiosLeaf) &&
+                string.Equals(GetStateString(target, "InstanceId"),
+                    expectedInstanceId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool HasBiosLeaf(
+            string biosDeviceName,
+            string expectedLeaf)
+        {
+            return string.Equals(biosDeviceName, expectedLeaf,
+                       StringComparison.OrdinalIgnoreCase) ||
+                biosDeviceName.EndsWith("." + expectedLeaf,
+                    StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetStateString(
+            Dictionary<string, object> parent,
+            string key)
+        {
+            object value;
+            if (!parent.TryGetValue(key, out value) || value == null)
+            {
+                return string.Empty;
+            }
+            string text = value as string;
+            if (text == null)
+            {
+                throw new InvalidDataException(
+                    "DeckLux state field '" + key + "' must be a string.");
+            }
+            return text;
+        }
+
+        private static void ValidateLegacyPrimaryOnlyStateJson(string json)
         {
             JavaScriptSerializer serializer = new JavaScriptSerializer();
             Dictionary<string, object> root = serializer.Deserialize<Dictionary<string, object>>(json);

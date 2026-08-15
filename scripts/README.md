@@ -2,7 +2,7 @@
 
 Copyright (c) 2026 Laszlo Toth <lavx@lavx.hu>.
 
-DeckLux 1.0.0 is distributed as a test-signed Windows driver with a graphical
+DeckLux 1.1.0 is distributed as a test-signed Windows driver with a graphical
 installer. The normal installer configures only the Steam Deck primary `LTRF`
 ambient-light sensor.
 
@@ -51,7 +51,7 @@ running DeckLux Setup.
 Run the release executable and approve its UAC prompt:
 
 ```text
-DeckLux-1.0.0-Setup.exe
+DeckLux-1.1.0-Setup.exe
 ```
 
 Setup verifies its embedded payload, copies immutable program files to
@@ -72,7 +72,7 @@ Developers can validate a built driver package from the project root:
 ```
 
 The release build performs package validation automatically and writes artifact
-hashes to `artifacts\release\1.0.0\SHA256SUMS.txt`.
+hashes to `artifacts\release\1.1.0\SHA256SUMS.txt`.
 
 ## Live readings
 
@@ -88,6 +88,29 @@ be run directly without Administrator access:
 The script reports the Windows default light sensor, timestamped lux readings,
 report intervals, invalid samples, timestamp advancement, and reading range.
 JSON and CSV output are available through `-OutputFormat`.
+
+### Comparing both OLED sensors
+
+After explicitly installing the OLED secondary sensor, compare every Windows
+ambient-light sensor in shared sampling cycles without Administrator access:
+
+```powershell
+& "$env:ProgramFiles\DeckLux\scripts\Compare-DeckLuxSensors.ps1" `
+    -DurationSeconds 20 `
+    -SampleIntervalMs 250
+```
+
+The comparison subscribes to each sensor's WinRT `ReadingChanged` event and
+temporarily requests a zero lux-change threshold so steady light still produces
+fresh samples. It records cycle, event-arrival, and sensor timestamps and
+computes pair delta and ratio only for two valid readings within the timestamp
+skew limit. On Valve Galileo firmware, `LTRF` is the left sensor and `LTRS`
+is the right sensor.
+
+Every captured report interval, report latency, percentage threshold, and
+absolute threshold is restored independently and verified in a `finally`
+path. One-sensor operation is supported, and `Object`, `Json`, and `Csv`
+output formats are available.
 
 ## Diagnostics
 
@@ -137,7 +160,9 @@ explicit advanced command:
 ```
 
 This exposes two independent Windows sensors. DeckLux does not combine their
-readings or reproduce Valve's proprietary obstruction/fusion policy.
+readings or reproduce Valve's proprietary obstruction/fusion policy. The 1.1.0
+setup uninstaller recognizes the exact recorded Galileo `LTRF`/`LTRS` pair
+and rolls both targets back through the same protected journal.
 
 An independently verified LTR-F216A on other hardware requires both its exact
 instance ID and the explicit compatible-device switch:

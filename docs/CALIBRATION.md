@@ -115,6 +115,13 @@ algorithm is proprietary and is not specified by the public SteamOS Manager or
 Linux driver. Any future fusion belongs above the physical sensor driver and
 must consume independently calibrated values.
 
+When both Galileo sensors are explicitly installed,
+`scripts/Compare-DeckLuxSensors.ps1` collects them in shared cycles and
+correlates only valid readings whose sensor timestamps are within the selected
+skew. It temporarily requests fresh per-interval reports from each WinRT client
+and verifies restoration of every changed sampling property. Pair deltas and
+ratios are diagnostics, not a fusion result or brightness recommendation.
+
 ## Source record
 
 - Valve's official SteamOS Manager, pinned commit

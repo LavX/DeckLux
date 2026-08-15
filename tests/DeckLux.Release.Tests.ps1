@@ -26,6 +26,7 @@ $requiredFiles = @(
     'THIRD_PARTY_NOTICES.md',
     'scripts\Install-DeckLux.ps1',
     'scripts\Uninstall-DeckLux.ps1',
+    'scripts\Compare-DeckLuxSensors.ps1',
     'scripts\New-DeckLuxRelease.ps1',
     'setup\DeckLux.Setup.cs',
     'setup\DeckLux.Setup.manifest')
@@ -52,21 +53,21 @@ $readmeText = Get-Content -LiteralPath `
     (Join-Path $projectRoot 'README.md') -Raw
 
 Assert-DeckLuxReleaseTest `
-    -Condition ($infText -match '(?m)^DriverVer\s*=\s*[^,]+,1\.0\.0\.0\s*$') `
-    -Message 'INF reports driver version 1.0.0.0'
+    -Condition ($infText -match '(?m)^DriverVer\s*=\s*08/15/2026,1\.1\.0\.0\s*$') `
+    -Message 'INF reports the 1.1.0.0 release version and date'
 Assert-DeckLuxReleaseTest `
-    -Condition ($resourceText -match 'FILEVERSION 1,0,0,0' -and
-        $resourceText -match 'PRODUCTVERSION 1,0,0,0' -and
-        $resourceText -match '"FileVersion", "1\.0\.0\.0\\0"' -and
-        $resourceText -match '"ProductVersion", "1\.0\.0\.0\\0"') `
-    -Message 'DLL resource versions are 1.0.0.0'
+    -Condition ($resourceText -match 'FILEVERSION 1,1,0,0' -and
+        $resourceText -match 'PRODUCTVERSION 1,1,0,0' -and
+        $resourceText -match '"FileVersion", "1\.1\.0\.0\\0"' -and
+        $resourceText -match '"ProductVersion", "1\.1\.0\.0\\0"') `
+    -Message 'DLL resource versions are 1.1.0.0'
 Assert-DeckLuxReleaseTest `
-    -Condition ($setupText -match 'const string Version = "1\.0\.0"' -and
-        $setupText -match 'const string DriverVersion = "1\.0\.0\.0"') `
+    -Condition ($setupText -match 'const string Version = "1\.1\.0"' -and
+        $setupText -match 'const string DriverVersion = "1\.1\.0\.0"') `
     -Message 'setup version constants are consistent'
 Assert-DeckLuxReleaseTest `
-    -Condition ($setupManifestText -match 'assemblyIdentity version="1\.0\.0\.0"') `
-    -Message 'setup manifest version is 1.0.0.0'
+    -Condition ($setupManifestText -match 'assemblyIdentity version="1\.1\.0\.0"') `
+    -Message 'setup manifest version is 1.1.0.0'
 
 Assert-DeckLuxReleaseTest `
     -Condition ($setupText -notmatch 'IncludeSecondary|AllowCompatibleSensor') `
@@ -74,6 +75,11 @@ Assert-DeckLuxReleaseTest `
 Assert-DeckLuxReleaseTest `
     -Condition ($setupText -match 'primary LTRF sensor') `
     -Message 'graphical installer identifies its primary-only scope'
+Assert-DeckLuxReleaseTest `
+    -Condition ((Get-Content -LiteralPath `
+        (Join-Path $projectRoot 'scripts\New-DeckLuxRelease.ps1') -Raw) `
+        -match "'scripts\\Compare-DeckLuxSensors\.ps1'") `
+    -Message 'release payload includes the dual-sensor comparator'
 Assert-DeckLuxReleaseTest `
     -Condition ($setupText -match 'CommonApplicationData' -and
         $setupText -match 'ProgramFiles') `
@@ -138,7 +144,7 @@ try {
         Completed = $false
         Uninstalled = $false
         Package = [pscustomobject]@{
-            DriverVersion = '1.0.0.0'
+            DriverVersion = '1.1.0.0'
             PublishedInf = 'oem42.inf'
         }
         Targets = @()

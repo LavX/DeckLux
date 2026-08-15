@@ -9,7 +9,7 @@ application, background service, or another handheld project.
 
 ## Overview
 
-DeckLux 1.0.0 supports the primary `LTRF` ambient-light sensor on Steam Deck
+DeckLux 1.1.0 supports the primary `LTRF` ambient-light sensor on Steam Deck
 OLED (Galileo). It registers as a standard Windows light sensor and applies the
 per-device factory calibration stored by Valve in system firmware.
 
@@ -22,8 +22,8 @@ be enabled and Secure Boot must be disabled before it can load. DeckLux requires
 
 ## Download
 
-Download DeckLux 1.0.0 from the
-[GitHub release page](https://github.com/LavX/DeckLux/releases/tag/v1.0.0).
+Download DeckLux 1.1.0 from the
+[GitHub release page](https://github.com/LavX/DeckLux/releases/tag/v1.1.0).
 The setup executable is the normal primary-sensor installer. SHA-256 checksums
 and a portable package are included with the release.
 
@@ -41,6 +41,8 @@ and a portable package are included with the release.
   transitions expected by Windows sensor clients.
 - Exact-device installation, recorded rollback, live WinRT testing, and focused
   diagnostics.
+- Timestamp-correlated comparison of the independently calibrated left and
+  right OLED sensors when the optional secondary sensor is installed.
 
 DeckLux reports illuminance. Windows and individual applications decide how
 those readings affect display brightness.
@@ -109,10 +111,10 @@ SHA-256 manifests.
 Release artifacts are placed under:
 
 ```text
-artifacts\release\1.0.0\DeckLux-1.0.0-Setup.exe
-artifacts\release\1.0.0\DeckLux-1.0.0-portable.zip
-artifacts\release\1.0.0\DeckLux-1.0.0-source.zip
-artifacts\release\1.0.0\SHA256SUMS.txt
+artifacts\release\1.1.0\DeckLux-1.1.0-Setup.exe
+artifacts\release\1.1.0\DeckLux-1.1.0-portable.zip
+artifacts\release\1.1.0\DeckLux-1.1.0-source.zip
+artifacts\release\1.1.0\SHA256SUMS.txt
 ```
 
 Validate a built package with:
@@ -130,7 +132,7 @@ rollback.
 Run the release installer and approve its Windows UAC prompt:
 
 ```text
-DeckLux-1.0.0-Setup.exe
+DeckLux-1.1.0-Setup.exe
 ```
 
 The installer verifies the Steam Deck firmware identity, resolves exactly one
@@ -164,6 +166,28 @@ JSON and CSV output are available for logging:
 & "$env:ProgramFiles\DeckLux\scripts\Test-DeckLuxSensor.ps1" -OutputFormat Json
 & "$env:ProgramFiles\DeckLux\scripts\Test-DeckLuxSensor.ps1" -OutputFormat Csv
 ```
+
+## Compare both OLED sensors
+
+The standard setup remains primary-only. After explicitly adding `LTRS` with
+the advanced `-IncludeSecondary` installation described in
+[scripts/README.md](scripts/README.md), compare the physical left and right
+sensors in shared sampling cycles:
+
+```powershell
+& "$env:ProgramFiles\DeckLux\scripts\Compare-DeckLuxSensors.ps1" `
+    -DurationSeconds 20 `
+    -SampleIntervalMs 250
+```
+
+The comparison tool requests fresh readings from both WinRT sensor clients,
+correlates them by sensor timestamp, and reports pair delta and ratio only when
+both samples are valid and within the allowed skew. It temporarily adjusts the
+clients' report interval, latency, and lux thresholds, then verifies that every
+changed value was restored.
+
+DeckLux exposes the two calibrated physical readings independently. The tool
+does not fuse them or change display brightness.
 
 Focused diagnostic collection is also available:
 

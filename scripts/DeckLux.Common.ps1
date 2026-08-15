@@ -5,7 +5,7 @@ Set-StrictMode -Version Latest
 
 $script:DeckLuxExpectedProvider = 'DeckLux Project'
 $script:DeckLuxExpectedInfName = 'DeckLuxSensor.inf'
-$script:DeckLuxProductVersion = '1.0.0'
+$script:DeckLuxProductVersion = '1.1.0'
 $script:DeckLuxHardwareId = 'ACPI\PRP0001'
 $script:DeckLuxOptInPropertyGuid = [Guid]'91b118a2-7b5d-4689-a5e7-c43e332b4966'
 $script:DeckLuxOptInPropertyPid = 2
