@@ -11,9 +11,10 @@ subscribes to ReadingChanged on all sensors before collecting data. Each shared
 cycle drains every sensor's event queue consecutively and correlates a selected
 pair by the timestamps supplied by Windows.
 
-On a firmware-identified Valve Galileo, LTRF is labelled Left and LTRS is
-labelled Right. Other systems retain Primary/Secondary or enumeration-order
-labels without guessing a physical side.
+On a firmware-identified Valve Galileo running DeckLux fusion, LTRF is the
+preferred fused Windows channel and LTRS remains the secondary raw diagnostic
+channel. The physical ACPI origin is still recorded, but the LTRF reading must
+not be interpreted as raw left-sensor lux.
 
 The tool temporarily changes only per-client WinRT sampling properties. It
 captures ReportInterval, ReportLatency, ReportThreshold.LuxPercentage, and
@@ -209,6 +210,11 @@ function Resolve-DeckLuxSensorIdentity {
         default { 'Unknown' }
     }
     $physicalSide = 'Unknown'
+    $signalKind = switch ($role) {
+        'Primary' { 'PrimaryRaw' }
+        'Secondary' { 'SecondaryRaw' }
+        default { 'Unknown' }
+    }
     $identitySource = if (-not [string]::IsNullOrWhiteSpace($biosLeaf)) {
         'PnP BIOS device name'
     }
@@ -222,10 +228,12 @@ function Resolve-DeckLuxSensorIdentity {
     if ($Platform.IsValveGalileo) {
         if ($biosLeaf -ieq 'LTRF') {
             $physicalSide = 'Left'
+            $signalKind = 'PreferredFused'
             $identitySource = 'Valve Galileo PnP BIOS device name'
         }
         elseif ($biosLeaf -ieq 'LTRS') {
             $physicalSide = 'Right'
+            $signalKind = 'SecondaryRaw'
             $identitySource = 'Valve Galileo PnP BIOS device name'
         }
     }
@@ -237,6 +245,7 @@ function Resolve-DeckLuxSensorIdentity {
         InstanceSuffix = $instanceSuffix
         Role = $role
         PhysicalSide = $physicalSide
+        SignalKind = $signalKind
         IdentitySource = $identitySource
     }
 }
@@ -274,6 +283,7 @@ function New-DeckLuxComparisonCsvRows {
             BiosDeviceName = $reading.BiosDeviceName
             Role = $reading.Role
             PhysicalSide = $reading.PhysicalSide
+            SignalKind = $reading.SignalKind
             IsDefault = $reading.IsDefault
             EventReceivedUtc = $reading.EventReceivedUtc
             ReadingTimestampUtc = $reading.ReadingTimestampUtc
@@ -327,6 +337,7 @@ function New-DeckLuxComparisonCsvRows {
             BiosDeviceName = $null
             Role = $null
             PhysicalSide = $null
+            SignalKind = $null
             IsDefault = $null
             EventReceivedUtc = $null
             ReadingTimestampUtc = $null
@@ -655,6 +666,7 @@ if ($null -ne $lightSensorType) {
             InstanceSuffix = $identity.InstanceSuffix
             Role = $identity.Role
             PhysicalSide = $identity.PhysicalSide
+            SignalKind = $identity.SignalKind
             IdentitySource = $identity.IdentitySource
             Sensor = $sensor
             Threshold = $reportThreshold
@@ -706,25 +718,21 @@ if ($null -ne $lightSensorType) {
 }
 
 $pairSelection = $null
-$left = @($sensorEntries | Where-Object { $_.PhysicalSide -eq 'Left' }) |
+$primary = @($sensorEntries | Where-Object { $_.Role -eq 'Primary' }) |
     Select-Object -First 1
-$right = @($sensorEntries | Where-Object { $_.PhysicalSide -eq 'Right' }) |
+$secondary = @($sensorEntries | Where-Object { $_.Role -eq 'Secondary' }) |
     Select-Object -First 1
-if ($null -ne $left -and $null -ne $right) {
-    $pairSelection = [pscustomobject][ordered]@{
-        Kind = 'GalileoLeftRight'
-        SensorAIndex = $left.SensorIndex
-        SensorALabel = 'Left'
-        SensorBIndex = $right.SensorIndex
-        SensorBLabel = 'Right'
+if ($null -ne $primary -and $null -ne $secondary) {
+    if ($platform.IsValveGalileo) {
+        $pairSelection = [pscustomobject][ordered]@{
+            Kind = 'GalileoFusedSecondary'
+            SensorAIndex = $primary.SensorIndex
+            SensorALabel = 'PreferredFused'
+            SensorBIndex = $secondary.SensorIndex
+            SensorBLabel = 'SecondaryRaw'
+        }
     }
-}
-else {
-    $primary = @($sensorEntries | Where-Object { $_.Role -eq 'Primary' }) |
-        Select-Object -First 1
-    $secondary = @($sensorEntries | Where-Object { $_.Role -eq 'Secondary' }) |
-        Select-Object -First 1
-    if ($null -ne $primary -and $null -ne $secondary) {
+    else {
         $pairSelection = [pscustomobject][ordered]@{
             Kind = 'PrimarySecondary'
             SensorAIndex = $primary.SensorIndex
@@ -733,14 +741,14 @@ else {
             SensorBLabel = 'Secondary'
         }
     }
-    elseif ($sensorEntries.Count -ge 2) {
-        $pairSelection = [pscustomobject][ordered]@{
-            Kind = 'EnumerationOrder'
-            SensorAIndex = $sensorEntries[0].SensorIndex
-            SensorALabel = 'First'
-            SensorBIndex = $sensorEntries[1].SensorIndex
-            SensorBLabel = 'Second'
-        }
+}
+elseif ($sensorEntries.Count -ge 2) {
+    $pairSelection = [pscustomobject][ordered]@{
+        Kind = 'EnumerationOrder'
+        SensorAIndex = $sensorEntries[0].SensorIndex
+        SensorALabel = 'First'
+        SensorBIndex = $sensorEntries[1].SensorIndex
+        SensorBLabel = 'Second'
     }
 }
 
@@ -951,6 +959,7 @@ try {
                     BiosDeviceName = $entry.BiosDeviceName
                     Role = $entry.Role
                     PhysicalSide = $entry.PhysicalSide
+                    SignalKind = $entry.SignalKind
                     IsDefault = $entry.IsDefault
                     EventReceivedUtc = $eventReceivedUtc
                     ReadingTimestampUtc = $readingTimestampUtc
@@ -1294,6 +1303,7 @@ foreach ($entry in $sensorEntries) {
         InstanceSuffix = $entry.InstanceSuffix
         Role = $entry.Role
         PhysicalSide = $entry.PhysicalSide
+        SignalKind = $entry.SignalKind
         IdentitySource = $entry.IdentitySource
         Status = $sensorStatus
         OpenError = $entry.OpenError

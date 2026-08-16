@@ -43,6 +43,10 @@ foreach ($requiredText in @(
     'IsValveGalileo',
     "`$physicalSide = 'Left'",
     "`$physicalSide = 'Right'",
+    "`$signalKind = 'PreferredFused'",
+    "Kind = 'GalileoFusedSecondary'",
+    "SensorALabel = 'PreferredFused'",
+    "SensorBLabel = 'SecondaryRaw'",
     'OriginalLuxPercentageThreshold',
     'EffectiveLuxPercentageThreshold',
     'FinalLuxPercentageThreshold',
@@ -63,6 +67,10 @@ foreach ($requiredText in @(
         -Condition ($text.Contains($requiredText)) `
         -Message "script is missing required contract text '$requiredText'"
 }
+
+Assert-SensorComparisonTest `
+    -Condition (-not $text.Contains("Kind = 'GalileoLeftRight'")) `
+    -Message 'fused LTRF output must not be presented as raw left-sensor data'
 
 Assert-SensorComparisonTest `
     -Condition (-not [regex]::IsMatch($text, '\.GetCurrentReading\s*\(')) `

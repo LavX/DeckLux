@@ -9,12 +9,12 @@ application, background service, or another handheld project.
 
 ## Overview
 
-DeckLux 1.1.0 supports the primary `LTRF` ambient-light sensor on Steam Deck
-OLED (Galileo). It registers as a standard Windows light sensor and applies the
-per-device factory calibration stored by Valve in system firmware.
-
-The default installation binds only `LTRF`. The OLED `LTRS` device is treated as
-a separate secondary sensor and requires an explicit installation option.
+DeckLux 1.1.0 installs both ambient-light sensors on Steam Deck OLED (Galileo)
+and applies the individual factory calibration stored for each sensor in Valve
+firmware. Windows sees `LTRF` as the preferred logical light sensor; its reading
+is fused from both OLED sensors. `LTRS` remains available as a nonpreferred raw
+diagnostic channel. Steam Deck LCD (Jupiter) continues to use its single `LTRF`
+sensor.
 
 DeckLux is distributed as a locally test-signed driver. Windows Test Mode must
 be enabled and Secure Boot must be disabled before it can load. DeckLux requires
@@ -24,8 +24,9 @@ be enabled and Secure Boot must be disabled before it can load. DeckLux requires
 
 Download DeckLux 1.1.0 from the
 [GitHub release page](https://github.com/LavX/DeckLux/releases/tag/v1.1.0).
-The setup executable is the normal primary-sensor installer. SHA-256 checksums
-and a portable package are included with the release.
+The setup executable automatically selects the correct sensor topology for the
+detected Steam Deck model. SHA-256 checksums and a portable package are included
+with the release.
 
 ## Features
 
@@ -37,12 +38,14 @@ and a portable package are included with the release.
 - Bounded not-ready retries, reset recovery, configuration readback, and
   suspend/resume lifecycle handling.
 - Valve per-device factory calibration read from SMBIOS.
+- Occlusion-resistant OLED fusion using a short per-channel median and the
+  brighter fresh channel, with automatic one-sensor fallback.
 - Report intervals, thresholds, timestamps, sensor state, and invalid-sample
   transitions expected by Windows sensor clients.
 - Exact-device installation, recorded rollback, live WinRT testing, and focused
   diagnostics.
-- Timestamp-correlated comparison of the independently calibrated left and
-  right OLED sensors when the optional secondary sensor is installed.
+- Timestamp-correlated comparison of the preferred fused OLED channel and the
+  secondary raw diagnostic channel.
 
 DeckLux reports illuminance. Windows and individual applications decide how
 those readings affect display brightness.
@@ -51,9 +54,9 @@ those readings affect display brightness.
 
 | Hardware | DeckLux behavior |
 | --- | --- |
-| Steam Deck OLED `LTRF` | Supported as the primary/default sensor |
-| Steam Deck OLED `LTRS` | Separate explicit option; never installed by default |
-| Steam Deck LCD with LTR-F216A | Jupiter firmware mapping is implemented |
+| Steam Deck OLED `LTRF` | Preferred logical sensor; reports fused OLED lux |
+| Steam Deck OLED `LTRS` | Installed by default as the raw secondary diagnostic channel |
+| Steam Deck LCD with LTR-F216A | Supported as the single preferred sensor |
 | Steam Deck LCD with TI OPT3001 | Not compatible; this is a different sensor |
 | Independently verified LTR-F216A | Supported only through exact-instance opt-in |
 
@@ -88,8 +91,14 @@ The Valve SMBIOS Type 11 mapping is:
 
 The four-byte `CalibrationScalePpm` device property belongs to one physical
 sensor; `1,000,000` represents scale `1.0`. DeckLux never adds or averages the
-`LTRF` and `LTRS` constants and does not claim to reproduce Valve's proprietary
-dual-sensor fusion or obstruction policy.
+`LTRF` and `LTRS` calibration constants. It calibrates each reading first, then
+fuses the resulting lux values.
+
+On OLED, each channel has a three-reading temporal median. When both medians are
+fresh (no more than one second old), the preferred channel reports the brighter
+one. If either sensor is unavailable or stale, it reports the healthy channel;
+if neither is valid, it reports an invalid sample. This is DeckLux's documented
+occlusion policy, not a claim to reproduce Valve's unpublished implementation.
 
 The evidence, conversion derivation, property contract, and failure behavior
 are documented in [docs/CALIBRATION.md](docs/CALIBRATION.md).
@@ -135,11 +144,12 @@ Run the release installer and approve its Windows UAC prompt:
 DeckLux-1.1.0-Setup.exe
 ```
 
-The installer verifies the Steam Deck firmware identity, resolves exactly one
-`LTRF` instance, reads its matching factory calibration, validates the package,
-trusts its exact test certificate, stages the INF, writes the device-specific
-properties, and binds that instance. The installed payload and rollback state
-are stored separately:
+The installer verifies the Steam Deck firmware identity and selects its exact
+topology: ordered `LTRF` plus `LTRS` on OLED, or the single `LTRF` on LCD. It
+reads each matching factory calibration, validates the package, trusts its exact
+test certificate, stages the INF, writes device-specific properties, and binds
+only those instances. The installed payload and rollback state are stored
+separately:
 
 ```text
 %ProgramFiles%\DeckLux
@@ -167,12 +177,10 @@ JSON and CSV output are available for logging:
 & "$env:ProgramFiles\DeckLux\scripts\Test-DeckLuxSensor.ps1" -OutputFormat Csv
 ```
 
-## Compare both OLED sensors
+## Inspect OLED fusion
 
-The standard setup remains primary-only. After explicitly adding `LTRS` with
-the advanced `-IncludeSecondary` installation described in
-[scripts/README.md](scripts/README.md), compare the physical left and right
-sensors in shared sampling cycles:
+On Steam Deck OLED, inspect the preferred fused channel and secondary raw
+channel in shared sampling cycles:
 
 ```powershell
 & "$env:ProgramFiles\DeckLux\scripts\Compare-DeckLuxSensors.ps1" `
@@ -182,12 +190,11 @@ sensors in shared sampling cycles:
 
 The comparison tool requests fresh readings from both WinRT sensor clients,
 correlates them by sensor timestamp, and reports pair delta and ratio only when
-both samples are valid and within the allowed skew. It temporarily adjusts the
-clients' report interval, latency, and lux thresholds, then verifies that every
-changed value was restored.
-
-DeckLux exposes the two calibrated physical readings independently. The tool
-does not fuse them or change display brightness.
+both samples are valid and within the allowed skew. `LTRF` is labelled
+`PreferredFused`; `LTRS` is labelled `SecondaryRaw`. The tool temporarily
+adjusts the clients' report interval, latency, and lux thresholds, then verifies
+that every changed value was restored. It observes driver output and never
+changes display brightness or the fusion policy.
 
 Focused diagnostic collection is also available:
 

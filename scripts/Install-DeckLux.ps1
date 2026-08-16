@@ -55,6 +55,8 @@ foreach ($warningText in @($package.Warnings)) {
 $platform = Get-DeckLuxPlatformSnapshot
 $requestedIds = @($InstanceId | Sort-Object -Unique)
 $hasExplicitInstance = $requestedIds.Count -gt 0
+$installSecondaryByDefault =
+    $platform.IsKnownSteamDeck -and $platform.DeckProduct -ieq 'Galileo'
 if ($AllowCompatibleSensor -and -not $hasExplicitInstance) {
     throw '-AllowCompatibleSensor requires at least one exact -InstanceId; compatible hardware is never auto-selected.'
 }
@@ -98,7 +100,7 @@ else {
     }
     $selectedSnapshots += $primary[0]
 
-    if ($IncludeSecondary) {
+    if ($IncludeSecondary -or $installSecondaryByDefault) {
         $secondary = @($allSnapshots | Where-Object { $_.Role -eq 'Secondary' })
         if ($secondary.Count -ne 1) {
             throw "Expected exactly one Steam Deck LTRS secondary instance; found $($secondary.Count)."

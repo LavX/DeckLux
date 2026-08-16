@@ -358,6 +358,10 @@ NTSTATUS DlxEvtDeviceAdd(
         return status;
     }
 
+    // Do not override S0 idle settings here. SensorsCx rejected that request
+    // for Galileo's alternate stack. Background acquisition runs while the
+    // stack is in D0, and D0Exit still quiesces the hardware.
+
     SENSOR_CONTROLLER_CONFIG sensorConfig;
     SENSOR_CONTROLLER_CONFIG_INIT(&sensorConfig);
     sensorConfig.DriverIsPowerPolicyOwner = WdfUseDefault;
@@ -647,6 +651,7 @@ NTSTATUS DlxPowerOn(_Inout_ PDLX_SENSOR_CONTEXT Context)
     Context->ConsecutiveNotReady = 0;
     Context->ConsecutiveNoSample = 0;
     Context->RecoveryAttempts = 0;
+    Context->NextRecoveryAttemptMs = 0;
 
     if (NT_SUCCESS(status))
     {
@@ -655,7 +660,7 @@ NTSTATUS DlxPowerOn(_Inout_ PDLX_SENSOR_CONTEXT Context)
         Context->RecoveryPending = false;
         Context->PendingInvalidReport = false;
 
-        if (Context->ClientRequestedStart)
+        if (Context->ClientRequestedStart || Context->BackgroundSampling)
         {
             status = DlxLtrf216aSetEnabled(Context->SpbIoTarget, true);
             Context->Started = true;
@@ -700,7 +705,8 @@ NTSTATUS DlxPowerOn(_Inout_ PDLX_SENSOR_CONTEXT Context)
         // and retry safely; each recovery probes again before its first write.
         Context->PoweredOn = true;
         Context->RecoveryPending = true;
-        Context->Started = Context->ClientRequestedStart;
+        Context->Started =
+            Context->ClientRequestedStart || Context->BackgroundSampling;
         InitPropVariantFromUInt32(
             SensorState_Error,
             &Context->SensorProperties->List[DlxSensorState].Value);

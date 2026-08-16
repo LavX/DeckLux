@@ -17,16 +17,40 @@ NTSTATUS DriverEntry(
     config.DriverPoolTag = DLX_POOL_TAG;
     config.EvtDriverUnload = DlxEvtDriverUnload;
 
-    const NTSTATUS status = WdfDriverCreate(
+    WDF_OBJECT_ATTRIBUTES driverAttributes;
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(
+        &driverAttributes,
+        DLX_DRIVER_CONTEXT);
+
+    WDFDRIVER driver = nullptr;
+    NTSTATUS status = WdfDriverCreate(
         DriverObject,
         RegistryPath,
-        WDF_NO_OBJECT_ATTRIBUTES,
+        &driverAttributes,
         &config,
-        WDF_NO_HANDLE);
+        &driver);
 
     if (!NT_SUCCESS(status))
     {
         DLX_TRACE_ERROR("WdfDriverCreate failed: 0x%08X", static_cast<ULONG>(status));
+        return status;
+    }
+
+    PDLX_DRIVER_CONTEXT context = DlxGetDriverContext(driver);
+    if (context == nullptr)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    WDF_OBJECT_ATTRIBUTES lockAttributes;
+    WDF_OBJECT_ATTRIBUTES_INIT(&lockAttributes);
+    lockAttributes.ParentObject = driver;
+    status = WdfWaitLockCreate(&lockAttributes, &context->FusionLock);
+    if (!NT_SUCCESS(status))
+    {
+        DLX_TRACE_ERROR(
+            "Fusion lock creation failed: 0x%08X",
+            static_cast<ULONG>(status));
     }
 
     return status;

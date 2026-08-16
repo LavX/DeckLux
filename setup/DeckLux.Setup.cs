@@ -197,7 +197,7 @@ namespace DeckLux.Setup
             description.MaximumSize = new Size(700, 0);
             description.Margin = new Padding(0, 4, 0, 12);
             description.Text = "Steam Deck ambient-light sensor support for Windows. " +
-                "This installer configures only the primary LTRF sensor.";
+                "Setup configures both sensors on Steam Deck OLED and the single sensor on Steam Deck LCD.";
             root.Controls.Add(description, 0, 1);
 
             Label requirements = new Label();
@@ -477,7 +477,7 @@ namespace DeckLux.Setup
             bool hadActiveInstallation = existing.Active && existing.Completed;
             try
             {
-                log("Installing the primary Steam Deck ambient-light sensor.");
+                log("Installing the Steam Deck ambient-light sensor topology.");
                 try
                 {
                     RunPowerShell(Path.Combine(Product.InstallRoot, @"scripts\Install-DeckLux.ps1"),
@@ -497,7 +497,7 @@ namespace DeckLux.Setup
                     throw new InvalidOperationException(
                         "Installation finished without a verified DeckLux " + Product.DriverVersion + " state.");
                 }
-                ValidateSupportedState();
+                ValidateInstalledDefaultState();
                 WriteUninstallRegistration();
                 HardenProtectedTree(Product.DataRoot, false);
                 log("DeckLux " + Product.Version + " installation verified.");
@@ -1037,6 +1037,65 @@ namespace DeckLux.Setup
                 targets, schemaVersion, GetStateDeckProduct(platform, schemaVersion));
         }
 
+        private static void ValidateInstalledDefaultState()
+        {
+            string json = File.ReadAllText(Product.StatePath, Encoding.UTF8);
+            ValidateInstalledDefaultStateJson(json);
+        }
+
+        internal static void ValidateInstalledDefaultStateJson(string json)
+        {
+            // Keep the broader validator for uninstalling supported legacy states,
+            // then enforce the current installer's exact completed topology.
+            ValidateSupportedStateJson(json);
+            Dictionary<string, object> root = DeserializeStateRoot(json);
+
+            object schemaValue;
+            if (!root.TryGetValue("SchemaVersion", out schemaValue) ||
+                !(schemaValue is int) || (int)schemaValue != 3)
+            {
+                throw new InvalidDataException(
+                    "A new DeckLux installation must record schema version 3.");
+            }
+            if (!GetRequiredStateBoolean(root, "Completed") ||
+                GetRequiredStateBoolean(root, "Uninstalled"))
+            {
+                throw new InvalidDataException(
+                    "A new DeckLux installation must record a completed, active transaction.");
+            }
+
+            Dictionary<string, object> platform = GetDictionary(root, "Platform");
+            string deckProduct = GetStateDeckProduct(platform, 3);
+            object targetValue;
+            IList targets;
+            if (!root.TryGetValue("Targets", out targetValue) ||
+                (targets = targetValue as IList) == null)
+            {
+                throw new InvalidDataException(
+                    "A new DeckLux installation has no valid target list.");
+            }
+
+            bool validDefaultTopology =
+                (string.Equals(deckProduct, "Galileo", StringComparison.Ordinal) &&
+                 targets.Count == 2 &&
+                 IsSupportedSensorTarget(
+                     targets[0] as Dictionary<string, object>,
+                     "Primary", "LTRF", "ACPI\\PRP0001\\0") &&
+                 IsSupportedSensorTarget(
+                     targets[1] as Dictionary<string, object>,
+                     "Secondary", "LTRS", "ACPI\\PRP0001\\1")) ||
+                (string.Equals(deckProduct, "Jupiter", StringComparison.Ordinal) &&
+                 targets.Count == 1 &&
+                 IsSupportedSensorTarget(
+                     targets[0] as Dictionary<string, object>,
+                     "Primary", "LTRF", "ACPI\\PRP0001\\1"));
+            if (!validDefaultTopology)
+            {
+                throw new InvalidDataException(
+                    "A new DeckLux installation does not contain the default sensor topology for this Steam Deck.");
+            }
+        }
+
         private static Dictionary<string, object> DeserializeStateRoot(string json)
         {
             try
@@ -1224,31 +1283,17 @@ namespace DeckLux.Setup
             return text;
         }
 
-        private static void ValidateLegacyPrimaryOnlyStateJson(string json)
+        private static bool GetRequiredStateBoolean(
+            Dictionary<string, object> parent,
+            string key)
         {
-            JavaScriptSerializer serializer = new JavaScriptSerializer();
-            Dictionary<string, object> root = serializer.Deserialize<Dictionary<string, object>>(json);
-            object targetValue;
-            if (!root.TryGetValue("Targets", out targetValue))
+            object value;
+            if (!parent.TryGetValue(key, out value) || !(value is bool))
             {
-                throw new InvalidDataException("DeckLux state has no target list.");
+                throw new InvalidDataException(
+                    "DeckLux state field '" + key + "' must be a Boolean.");
             }
-            IList targets = targetValue as IList;
-            if (targets == null || targets.Count != 1)
-            {
-                throw new InvalidDataException("The standard installer must record exactly one target.");
-            }
-            Dictionary<string, object> target = targets[0] as Dictionary<string, object>;
-            string biosDeviceName = target == null ? string.Empty : GetString(target, "BiosDeviceName");
-            if (target == null ||
-                !string.Equals(GetString(target, "Role"), "Primary", StringComparison.Ordinal) ||
-                !(string.Equals(biosDeviceName, "LTRF", StringComparison.OrdinalIgnoreCase) ||
-                  biosDeviceName.EndsWith(".LTRF", StringComparison.OrdinalIgnoreCase)) ||
-                !GetString(target, "InstanceId").StartsWith(
-                    @"ACPI\PRP0001\", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException("The standard installer must bind only the primary LTRF sensor.");
-            }
+            return (bool)value;
         }
 
         private static void WriteUninstallRegistration()

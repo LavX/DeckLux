@@ -1149,7 +1149,9 @@ function Test-DeckLuxPackageInternal {
         'SensorsCx extension' = '(?im)^\s*UmdfExtensions\s*=\s*SensorsCx0102\s*$'
         'PnP lockdown' = '(?im)^\s*PnpLockdown\s*=\s*1\s*$'
         'manual-selection exclusion' = '(?im)^\s*ExcludeFromSelect\s*=\s*\*\s*$'
-        'isolated UMDF host' = '(?im)^\s*UmdfHostProcessSharing\s*=\s*ProcessSharingDisabled\s*$'
+        'dedicated pooled UMDF host' = '(?im)^\s*UmdfHostProcessSharing\s*=\s*ProcessSharingEnabled\s*$'
+        'fusion device-group directive' = '(?im)^\s*AddReg\s*=\s*DeckLux_Install\.NT\.HW\.AddReg\s*$'
+        'fusion device-group identity' = '(?im)^\s*HKR\s*,\s*"WUDF"\s*,\s*"DeviceGroupId"\s*,\s*0x00000000\s*,\s*"DeckLux\.Sensor\.Fusion"\s*$'
         'direct hardware access declaration' = '(?im)^\s*UmdfDirectHardwareAccess\s*=\s*AllowDirectHardwareAccess\s*$'
         'DeckLux provider string' = '(?im)^\s*ProviderName\s*=\s*"DeckLux Project"\s*$'
         'DeckLux manufacturer string' = '(?im)^\s*ManufacturerName\s*=\s*"DeckLux Project"\s*$'
@@ -1165,7 +1167,23 @@ function Test-DeckLuxPackageInternal {
         throw 'INF validation failed: package still references legacy DIRID 12.'
     }
 
-    if ($infText -match '(?im)^\s*(AddReg|DelReg|CopyINF|CoInstallers32|UpperFilters|LowerFilters|RunPreSetupCommands)\s*=') {
+    $addRegDirectives = [regex]::Matches(
+        $infText,
+        '(?im)^\s*AddReg\s*=.*$')
+    if ($addRegDirectives.Count -ne 1 -or
+        $addRegDirectives[0].Value -notmatch
+            '(?i)^\s*AddReg\s*=\s*DeckLux_Install\.NT\.HW\.AddReg\s*$') {
+        throw 'INF validation failed: the dedicated fusion device group must be the only AddReg directive.'
+    }
+
+    $hkrEntries = [regex]::Matches($infText, '(?im)^\s*HKR\s*,.*$')
+    if ($hkrEntries.Count -ne 1 -or
+        $hkrEntries[0].Value -notmatch
+            '(?i)^\s*HKR\s*,\s*"WUDF"\s*,\s*"DeviceGroupId"\s*,\s*0x00000000\s*,\s*"DeckLux\.Sensor\.Fusion"\s*$') {
+        throw 'INF validation failed: the fusion DeviceGroupId must be the only HKR registry entry.'
+    }
+
+    if ($infText -match '(?im)^\s*(DelReg|CopyINF|CoInstallers32|UpperFilters|LowerFilters|RunPreSetupCommands)\s*=') {
         throw 'INF validation failed: package contains an unexpected registry, filter, co-installer, or chained-INF directive.'
     }
 

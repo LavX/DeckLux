@@ -83,6 +83,24 @@ enum DLX_THRESHOLD_INDEX
     DlxThresholdCount,
 };
 
+typedef struct _DLX_FUSION_CHANNEL_STATE
+{
+    FLOAT Samples[DLX_FUSION_WINDOW_SIZE];
+    std::uint32_t SampleCount;
+    std::uint32_t NextSampleIndex;
+    ULONGLONG UpdatedAtMs;
+    bool Valid;
+} DLX_FUSION_CHANNEL_STATE, *PDLX_FUSION_CHANNEL_STATE;
+
+typedef struct _DLX_DRIVER_CONTEXT
+{
+    WDFWAITLOCK FusionLock;
+    DLX_FUSION_CHANNEL_STATE Primary;
+    DLX_FUSION_CHANNEL_STATE Secondary;
+} DLX_DRIVER_CONTEXT, *PDLX_DRIVER_CONTEXT;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DLX_DRIVER_CONTEXT, DlxGetDriverContext);
+
 typedef struct _DLX_SENSOR_CONTEXT
 {
     WDFDEVICE Device;
@@ -95,6 +113,7 @@ typedef struct _DLX_SENSOR_CONTEXT
     bool PoweredOn;
     bool Started;
     bool ClientRequestedStart;
+    bool BackgroundSampling;
     bool FirstSample;
     bool LastSampleValid;
     bool HardwareValidated;
@@ -102,6 +121,8 @@ typedef struct _DLX_SENSOR_CONTEXT
     bool InvalidSampleReported;
     bool PendingInvalidReport;
     bool RecoveryPending;
+    ULONGLONG NextRecoveryAttemptMs;
+    ULONGLONG LastClientReportMs;
 
     DLX_DEVICE_ROLE Role;
     ULONG IntervalMs;

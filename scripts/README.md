@@ -3,8 +3,9 @@
 Copyright (c) 2026 Laszlo Toth <lavx@lavx.hu>.
 
 DeckLux 1.1.0 is distributed as a test-signed Windows driver with a graphical
-installer. The normal installer configures only the Steam Deck primary `LTRF`
-ambient-light sensor.
+installer. On Steam Deck OLED, the normal installer configures both calibrated
+ambient-light sensors and exposes `LTRF` as the preferred fused channel. Steam
+Deck LCD uses its single `LTRF` sensor.
 
 The installer:
 
@@ -12,7 +13,7 @@ The installer:
 - Never changes Secure Boot, BitLocker, or BCD configuration.
 - Never initiates a reboot.
 - Never uses PnPUtil's all-matching `/install` mode.
-- Authorizes and binds one exact device instance.
+- Authorizes and binds only the exact instances defined for the detected model.
 - Reads Valve factory calibration before making system changes.
 - Preserves a machine-wide rollback journal under `%ProgramData%\DeckLux`.
 
@@ -57,11 +58,9 @@ DeckLux-1.1.0-Setup.exe
 Setup verifies its embedded payload, copies immutable program files to
 `%ProgramFiles%\DeckLux`, protects its state directory under
 `%ProgramData%\DeckLux`, imports the exact package certificate, stages the
-driver, applies per-device calibration, and binds only the primary `LTRF`
-instance. It also registers DeckLux in Windows Installed apps.
-
-The standard graphical installer has no secondary-sensor or generic-device
-option.
+driver, applies per-device calibration, and binds ordered `LTRF` plus `LTRS` on
+OLED or the single `LTRF` on LCD. It also registers DeckLux in Windows Installed
+apps. The graphical installer has no generic-device option.
 
 ## Package validation
 
@@ -89,10 +88,10 @@ The script reports the Windows default light sensor, timestamped lux readings,
 report intervals, invalid samples, timestamp advancement, and reading range.
 JSON and CSV output are available through `-OutputFormat`.
 
-### Comparing both OLED sensors
+### Inspecting OLED fusion
 
-After explicitly installing the OLED secondary sensor, compare every Windows
-ambient-light sensor in shared sampling cycles without Administrator access:
+Compare the preferred fused OLED channel with its secondary raw diagnostic
+channel in shared sampling cycles without Administrator access:
 
 ```powershell
 & "$env:ProgramFiles\DeckLux\scripts\Compare-DeckLuxSensors.ps1" `
@@ -104,8 +103,8 @@ The comparison subscribes to each sensor's WinRT `ReadingChanged` event and
 temporarily requests a zero lux-change threshold so steady light still produces
 fresh samples. It records cycle, event-arrival, and sensor timestamps and
 computes pair delta and ratio only for two valid readings within the timestamp
-skew limit. On Valve Galileo firmware, `LTRF` is the left sensor and `LTRS`
-is the right sensor.
+skew limit. On Valve Galileo firmware, `LTRF` is labelled `PreferredFused` and
+`LTRS` is labelled `SecondaryRaw`; the physical ACPI origins are also recorded.
 
 Every captured report interval, report latency, percentage threshold, and
 absolute threshold is restored independently and verified in a `finally`
@@ -152,17 +151,12 @@ diagnostics. Run it from 64-bit PowerShell as Administrator:
 .\scripts\Install-DeckLux.ps1
 ```
 
-On Steam Deck OLED, the separate `LTRS` sensor can be installed only through an
-explicit advanced command:
-
-```powershell
-.\scripts\Install-DeckLux.ps1 -IncludeSecondary
-```
-
-This exposes two independent Windows sensors. DeckLux does not combine their
-readings or reproduce Valve's proprietary obstruction/fusion policy. The 1.1.0
-setup uninstaller recognizes the exact recorded Galileo `LTRF`/`LTRS` pair
-and rolls both targets back through the same protected journal.
+With no explicit instance IDs, the command-line installer uses the same model
+defaults as graphical Setup: dual fused sensing on Galileo and one sensor on
+Jupiter. `-IncludeSecondary` remains accepted for explicit compatibility with
+older deployment commands, but is no longer required on OLED. The Setup
+uninstaller recognizes the exact recorded topology and rolls every target back
+through the same protected journal.
 
 An independently verified LTR-F216A on other hardware requires both its exact
 instance ID and the explicit compatible-device switch:

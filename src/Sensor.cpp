@@ -153,7 +153,7 @@ const WCHAR* ModelForRole(_In_ DLX_DEVICE_ROLE Role)
 {
     if (Role == DLX_DEVICE_ROLE::Primary)
     {
-        return L"LTR-F216A (LTRF)";
+        return L"LTR-F216A (preferred; fused when paired)";
     }
 
     if (Role == DLX_DEVICE_ROLE::Secondary)
@@ -213,6 +213,215 @@ NTSTATUS CopyCollection(
     return CollectionsListCopyAndMarshall(Destination, Source);
 }
 
+PDLX_FUSION_CHANNEL_STATE FusionChannelForRole(
+    _Inout_ PDLX_DRIVER_CONTEXT DriverContext,
+    _In_ DLX_DEVICE_ROLE Role)
+{
+    if (DriverContext == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (Role == DLX_DEVICE_ROLE::Primary)
+    {
+        return &DriverContext->Primary;
+    }
+    if (Role == DLX_DEVICE_ROLE::Secondary)
+    {
+        return &DriverContext->Secondary;
+    }
+    return nullptr;
+}
+
+PDLX_DRIVER_CONTEXT FusionContextForSensor(
+    _In_ PDLX_SENSOR_CONTEXT Context)
+{
+    if (Context == nullptr || Context->Device == nullptr)
+    {
+        return nullptr;
+    }
+
+    WDFDRIVER driver = WdfDeviceGetDriver(Context->Device);
+    return driver == nullptr ? nullptr : DlxGetDriverContext(driver);
+}
+
+ULONG EffectiveSamplingInterval(_In_ PDLX_SENSOR_CONTEXT Context)
+{
+    if (Context == nullptr)
+    {
+        return DLX_DEFAULT_INTERVAL_MS;
+    }
+
+    return DlxFusionSamplingInterval(
+        Context->BackgroundSampling,
+        Context->IntervalMs,
+        DLX_DEFAULT_INTERVAL_MS);
+}
+
+bool ClientReportIsDue(_In_ PDLX_SENSOR_CONTEXT Context)
+{
+    if (Context == nullptr || !Context->ClientRequestedStart)
+    {
+        return false;
+    }
+
+    if (Context->FirstSample ||
+        !Context->LastSampleValid ||
+        Context->LastClientReportMs == 0)
+    {
+        return true;
+    }
+
+    return DlxFusionClientReportIsDue(
+        GetTickCount64(),
+        Context->LastClientReportMs,
+        Context->IntervalMs);
+}
+
+void PublishFusionSample(
+    _Inout_ PDLX_SENSOR_CONTEXT Context,
+    _In_ FLOAT Lux)
+{
+    PDLX_DRIVER_CONTEXT driverContext = FusionContextForSensor(Context);
+    if (driverContext == nullptr || driverContext->FusionLock == nullptr)
+    {
+        return;
+    }
+
+    WdfWaitLockAcquire(driverContext->FusionLock, nullptr);
+    PDLX_FUSION_CHANNEL_STATE channel = FusionChannelForRole(
+        driverContext,
+        Context->Role);
+    if (channel != nullptr &&
+        DlxFusionPushSample(
+            channel->Samples,
+            &channel->SampleCount,
+            &channel->NextSampleIndex,
+            Lux))
+    {
+        channel->UpdatedAtMs = GetTickCount64();
+        channel->Valid = true;
+    }
+    WdfWaitLockRelease(driverContext->FusionLock);
+}
+
+void InvalidateFusionSample(_Inout_ PDLX_SENSOR_CONTEXT Context)
+{
+    PDLX_DRIVER_CONTEXT driverContext = FusionContextForSensor(Context);
+    if (driverContext == nullptr || driverContext->FusionLock == nullptr)
+    {
+        return;
+    }
+
+    WdfWaitLockAcquire(driverContext->FusionLock, nullptr);
+    PDLX_FUSION_CHANNEL_STATE channel = FusionChannelForRole(
+        driverContext,
+        Context->Role);
+    if (channel != nullptr)
+    {
+        channel->SampleCount = 0;
+        channel->NextSampleIndex = 0;
+        channel->UpdatedAtMs = 0;
+        channel->Valid = false;
+    }
+    WdfWaitLockRelease(driverContext->FusionLock);
+}
+
+bool TryGetFusedLux(
+    _In_ PDLX_SENSOR_CONTEXT Context,
+    _Out_ FLOAT* FusedLux)
+{
+    if (Context == nullptr ||
+        Context->Role != DLX_DEVICE_ROLE::Primary ||
+        FusedLux == nullptr)
+    {
+        return false;
+    }
+
+    PDLX_DRIVER_CONTEXT driverContext = FusionContextForSensor(Context);
+    if (driverContext == nullptr || driverContext->FusionLock == nullptr)
+    {
+        return false;
+    }
+
+    const ULONGLONG nowMs = GetTickCount64();
+    bool primaryValid = false;
+    bool secondaryValid = false;
+    FLOAT primaryLux = 0.0f;
+    FLOAT secondaryLux = 0.0f;
+
+    WdfWaitLockAcquire(driverContext->FusionLock, nullptr);
+    if (driverContext->Primary.Valid &&
+        DlxFusionSampleIsFresh(
+            nowMs,
+            driverContext->Primary.UpdatedAtMs) &&
+        driverContext->Primary.SampleCount > 0)
+    {
+        primaryLux = DlxFusionMedian(
+            driverContext->Primary.Samples,
+            driverContext->Primary.SampleCount);
+        primaryValid = true;
+    }
+    if (driverContext->Secondary.Valid &&
+        DlxFusionSampleIsFresh(
+            nowMs,
+            driverContext->Secondary.UpdatedAtMs) &&
+        driverContext->Secondary.SampleCount > 0)
+    {
+        secondaryLux = DlxFusionMedian(
+            driverContext->Secondary.Samples,
+            driverContext->Secondary.SampleCount);
+        secondaryValid = true;
+    }
+    WdfWaitLockRelease(driverContext->FusionLock);
+
+    return DlxFuseAmbientLux(
+        primaryValid,
+        primaryLux,
+        secondaryValid,
+        secondaryLux,
+        FusedLux);
+}
+
+NTSTATUS ReportLux(
+    _Inout_ PDLX_SENSOR_CONTEXT Context,
+    _In_ FLOAT Lux)
+{
+    if (!DlxShouldReportLux(
+            Context->FirstSample,
+            Context->LastSampleValid,
+            Context->LastLux,
+            Lux,
+            Context->ThresholdPercent,
+            Context->ThresholdAbsolute))
+    {
+        return STATUS_DATA_NOT_ACCEPTED;
+    }
+
+    FILETIME timestamp = {};
+    GetSystemTimePreciseAsFileTime(&timestamp);
+    InitPropVariantFromFileTime(
+        &timestamp,
+        &Context->SensorData->List[DlxDataTimestamp].Value);
+    InitPropVariantFromFloat(
+        Lux,
+        &Context->SensorData->List[DlxDataLux].Value);
+    InitPropVariantFromBoolean(
+        TRUE,
+        &Context->SensorData->List[DlxDataIsValid].Value);
+
+    SensorsCxSensorDataReady(Context->SensorInstance, Context->SensorData);
+    Context->LastClientReportMs = GetTickCount64();
+    Context->LastLux = Lux;
+    Context->LastSampleValid = true;
+    Context->InvalidSampleReported = false;
+    Context->FirstSample = false;
+    InitPropVariantFromUInt32(
+        SensorState_Active,
+        &Context->SensorProperties->List[DlxSensorState].Value);
+    return STATUS_SUCCESS;
+}
+
 void ReportValidityTransition(
     _Inout_ PDLX_SENSOR_CONTEXT Context,
     _In_ bool IsValid)
@@ -244,6 +453,34 @@ void ReportValidityTransition(
 
 void ReportInvalidOnce(_Inout_ PDLX_SENSOR_CONTEXT Context)
 {
+    InvalidateFusionSample(Context);
+
+    if (Context->Role == DLX_DEVICE_ROLE::Primary)
+    {
+        FLOAT fallbackLux = 0.0f;
+        if (TryGetFusedLux(Context, &fallbackLux))
+        {
+            if (ClientReportIsDue(Context))
+            {
+                if (!Context->LastSampleValid)
+                {
+                    Context->FirstSample = true;
+                }
+                (void)ReportLux(Context, fallbackLux);
+            }
+            Context->PendingInvalidReport = false;
+            return;
+        }
+    }
+
+    if (Context->BackgroundSampling && !Context->ClientRequestedStart)
+    {
+        Context->LastSampleValid = false;
+        Context->InvalidSampleReported = true;
+        Context->PendingInvalidReport = false;
+        return;
+    }
+
     if (Context->LastSampleValid || !Context->InvalidSampleReported)
     {
         ReportValidityTransition(Context, false);
@@ -281,15 +518,20 @@ NTSTATUS RecoverSensorAfterReset(
     if (NT_SUCCESS(status))
     {
         Context->RecoveryPending = false;
+        Context->NextRecoveryAttemptMs = 0;
         Context->HardwareValidated = true;
         Context->FirstSample = true;
         Context->ConsecutiveIoFailures = 0;
         Context->ConsecutiveNotReady = 0;
         Context->ConsecutiveNoSample = 0;
+        Context->RecoveryAttempts = 0;
+        *NextDelayMs = DLX_LTRF216A_STARTUP_DELAY_MS;
         DLX_TRACE_INFO("Recovered sensor after reset for %ls", Context->BiosName);
     }
     else
     {
+        Context->NextRecoveryAttemptMs =
+            GetTickCount64() + *NextDelayMs;
         DLX_TRACE_ERROR(
             "Sensor reset recovery failed for %ls: 0x%08X",
             Context->BiosName,
@@ -297,6 +539,76 @@ NTSTATUS RecoverSensorAfterReset(
     }
 
     return status;
+}
+
+ULONG RemainingRecoveryDelay(
+    _In_ PDLX_SENSOR_CONTEXT Context,
+    _In_ ULONGLONG NowMs)
+{
+    if (Context == nullptr || Context->NextRecoveryAttemptMs <= NowMs)
+    {
+        return 1;
+    }
+
+    const ULONGLONG remaining = Context->NextRecoveryAttemptMs - NowMs;
+    return remaining > DLX_MAX_COUNTER
+        ? DLX_MAX_COUNTER
+        : static_cast<ULONG>(remaining);
+}
+
+NTSTATUS ServiceRecoveryAndFallback(
+    _Inout_ PDLX_SENSOR_CONTEXT Context,
+    _Out_ ULONG* NextDelayMs)
+{
+    const ULONGLONG nowMs = GetTickCount64();
+    const bool recoveryDue =
+        Context->NextRecoveryAttemptMs == 0 ||
+        nowMs >= Context->NextRecoveryAttemptMs;
+    NTSTATUS recoveryStatus = STATUS_NO_DATA_DETECTED;
+
+    if (recoveryDue)
+    {
+        recoveryStatus = RecoverSensorAfterReset(Context, NextDelayMs);
+    }
+    else
+    {
+        *NextDelayMs = RemainingRecoveryDelay(Context, nowMs);
+    }
+
+    if (Context->Role == DLX_DEVICE_ROLE::Primary)
+    {
+        FLOAT fallbackLux = 0.0f;
+        const bool fallbackValid = TryGetFusedLux(Context, &fallbackLux);
+        if (fallbackValid && ClientReportIsDue(Context))
+        {
+            (void)ReportLux(Context, fallbackLux);
+        }
+        else if (!fallbackValid &&
+                 (Context->LastSampleValid ||
+                  !Context->InvalidSampleReported))
+        {
+            // The primary is unavailable and the alternate has now failed or
+            // aged out. Do not leave the preferred reading valid forever.
+            ReportValidityTransition(Context, false);
+        }
+
+        // Continue forwarding a healthy alternate at the primary client's
+        // cadence without defeating the bounded hardware-recovery backoff.
+        if (Context->RecoveryPending)
+        {
+            const ULONG recoveryDelay = RemainingRecoveryDelay(
+                Context,
+                GetTickCount64());
+            const ULONG samplingDelay = EffectiveSamplingInterval(Context);
+            *NextDelayMs = DlxFusionRecoveryTimerDelay(
+                recoveryDelay,
+                samplingDelay);
+        }
+    }
+
+    return recoveryDue && !NT_SUCCESS(recoveryStatus)
+        ? recoveryStatus
+        : STATUS_NO_DATA_DETECTED;
 }
 }
 
@@ -319,12 +631,15 @@ NTSTATUS DlxInitializeSensorContext(
     Context->PoweredOn = false;
     Context->Started = false;
     Context->ClientRequestedStart = false;
+    Context->BackgroundSampling = false;
     Context->FirstSample = true;
     Context->LastSampleValid = false;
     Context->HardwareValidated = false;
     Context->InvalidSampleReported = false;
     Context->PendingInvalidReport = false;
     Context->RecoveryPending = false;
+    Context->NextRecoveryAttemptMs = 0;
+    Context->LastClientReportMs = 0;
     Context->IntervalMs = DLX_DEFAULT_INTERVAL_MS;
     Context->ConsecutiveIoFailures = 0;
     Context->ConsecutiveNotReady = 0;
@@ -354,6 +669,8 @@ NTSTATUS DlxInitializeSensorContext(
 
     Context->Role = DlxRoleFromBiosName(Context->BiosName);
     Context->IsPrimary = Context->Role != DLX_DEVICE_ROLE::Secondary;
+    Context->BackgroundSampling =
+        Context->Role == DLX_DEVICE_ROLE::Secondary;
 
     ULONG configuredScalePpm = DLX_CALIBRATION_SCALE_PPM_DEFAULT;
     const NTSTATUS calibrationStatus = DlxQueryCalibrationScale(
@@ -614,7 +931,10 @@ NTSTATUS DlxInitializeSensorContext(
         list->List[DlxFieldRangeMaximum].Key =
             PKEY_SensorDataField_RangeMaximum;
         InitPropVariantFromFloat(
-            DlxLtrf216aMaximumLux(Context->CalibrationScalePpm),
+            DlxLtrf216aMaximumLux(
+                Context->Role == DLX_DEVICE_ROLE::Primary
+                    ? DLX_CALIBRATION_SCALE_PPM_MAXIMUM
+                    : Context->CalibrationScalePpm),
             &list->List[DlxFieldRangeMaximum].Value);
     }
 
@@ -655,7 +975,7 @@ VOID DlxEvtTimer(_In_ WDFTIMER Timer)
 
     ULONG nextDelayMs = DLX_DEFAULT_INTERVAL_MS;
     WdfWaitLockAcquire(context->Lock, nullptr);
-    nextDelayMs = context->IntervalMs;
+    nextDelayMs = EffectiveSamplingInterval(context);
     if (context->Started && context->PoweredOn)
     {
         const NTSTATUS status = DlxReadAndReportSample(context, &nextDelayMs);
@@ -689,7 +1009,7 @@ NTSTATUS DlxReadAndReportSample(
         return STATUS_INVALID_PARAMETER;
     }
 
-    *NextDelayMs = Context->IntervalMs;
+    *NextDelayMs = EffectiveSamplingInterval(Context);
 
     if (Context->PendingInvalidReport)
     {
@@ -701,12 +1021,7 @@ NTSTATUS DlxReadAndReportSample(
 
     if (Context->RecoveryPending)
     {
-        const NTSTATUS recoveryStatus = RecoverSensorAfterReset(
-            Context,
-            NextDelayMs);
-        return NT_SUCCESS(recoveryStatus)
-            ? STATUS_NO_DATA_DETECTED
-            : recoveryStatus;
+        return ServiceRecoveryAndFallback(Context, NextDelayMs);
     }
 
     ULONG raw = 0;
@@ -746,12 +1061,8 @@ NTSTATUS DlxReadAndReportSample(
             Context->BiosName);
         ReportInvalidOnce(Context);
         Context->RecoveryPending = true;
-        const NTSTATUS recoveryStatus = RecoverSensorAfterReset(
-            Context,
-            NextDelayMs);
-        return NT_SUCCESS(recoveryStatus)
-            ? STATUS_NO_DATA_DETECTED
-            : recoveryStatus;
+        Context->NextRecoveryAttemptMs = 0;
+        return ServiceRecoveryAndFallback(Context, NextDelayMs);
     }
 
     if (powerOnReset)
@@ -761,12 +1072,8 @@ NTSTATUS DlxReadAndReportSample(
             Context->BiosName);
         ReportInvalidOnce(Context);
         Context->RecoveryPending = true;
-        const NTSTATUS recoveryStatus = RecoverSensorAfterReset(
-            Context,
-            NextDelayMs);
-        return NT_SUCCESS(recoveryStatus)
-            ? STATUS_NO_DATA_DETECTED
-            : recoveryStatus;
+        Context->NextRecoveryAttemptMs = 0;
+        return ServiceRecoveryAndFallback(Context, NextDelayMs);
     }
 
     if (!dataReady)
@@ -792,12 +1099,8 @@ NTSTATUS DlxReadAndReportSample(
             Context->BiosName);
         ReportInvalidOnce(Context);
         Context->RecoveryPending = true;
-        const NTSTATUS recoveryStatus = RecoverSensorAfterReset(
-            Context,
-            NextDelayMs);
-        return NT_SUCCESS(recoveryStatus)
-            ? STATUS_NO_DATA_DETECTED
-            : recoveryStatus;
+        Context->NextRecoveryAttemptMs = 0;
+        return ServiceRecoveryAndFallback(Context, NextDelayMs);
     }
 
     Context->ConsecutiveIoFailures = 0;
@@ -810,39 +1113,30 @@ NTSTATUS DlxReadAndReportSample(
         Context->CalibrationScale,
         Context->CalibrationOffset);
 
-    if (!DlxShouldReportLux(
-            Context->FirstSample,
-            Context->LastSampleValid,
-            Context->LastLux,
-            lux,
-            Context->ThresholdPercent,
-            Context->ThresholdAbsolute))
+    PublishFusionSample(Context, lux);
+
+    if (Context->Role == DLX_DEVICE_ROLE::Primary)
     {
-        return STATUS_DATA_NOT_ACCEPTED;
+        FLOAT fusedLux = lux;
+        (void)TryGetFusedLux(Context, &fusedLux);
+        return ClientReportIsDue(Context)
+            ? ReportLux(Context, fusedLux)
+            : STATUS_DATA_NOT_ACCEPTED;
     }
 
-    FILETIME timestamp = {};
-    GetSystemTimePreciseAsFileTime(&timestamp);
-
-    InitPropVariantFromFileTime(
-        &timestamp,
-        &Context->SensorData->List[DlxDataTimestamp].Value);
-    InitPropVariantFromFloat(
-        lux,
-        &Context->SensorData->List[DlxDataLux].Value);
-    InitPropVariantFromBoolean(
-        TRUE,
-        &Context->SensorData->List[DlxDataIsValid].Value);
-
-    SensorsCxSensorDataReady(Context->SensorInstance, Context->SensorData);
-    Context->LastLux = lux;
-    Context->LastSampleValid = true;
-    Context->InvalidSampleReported = false;
-    Context->FirstSample = false;
-    InitPropVariantFromUInt32(
-        SensorState_Active,
-        &Context->SensorProperties->List[DlxSensorState].Value);
-    return STATUS_SUCCESS;
+    if (Context->BackgroundSampling && !ClientReportIsDue(Context))
+    {
+        if (!Context->ClientRequestedStart)
+        {
+            // A healthy background sample clears the private failure marker;
+            // a client opening later should receive the fresh valid reading,
+            // not a stale invalid transition that it never observed.
+            Context->InvalidSampleReported = false;
+            Context->PendingInvalidReport = false;
+        }
+        return STATUS_DATA_NOT_ACCEPTED;
+    }
+    return ReportLux(Context, lux);
 }
 
 NTSTATUS DlxEvtSensorStart(_In_ SENSOROBJECT SensorInstance)
@@ -862,8 +1156,29 @@ NTSTATUS DlxEvtSensorStart(_In_ SENSOROBJECT SensorInstance)
         return STATUS_DEVICE_NOT_READY;
     }
 
+    context->ClientRequestedStart = true;
+    context->LastClientReportMs = 0;
     if (context->Started)
     {
+        context->FirstSample = true;
+        if (context->RecoveryPending || context->InvalidSampleReported)
+        {
+            // The prior invalid state may have been suppressed because no
+            // diagnostic client existed. Force exactly one transition for the
+            // newly opened client before recovery/fresh data continues.
+            context->InvalidSampleReported = false;
+            context->PendingInvalidReport = true;
+            InitPropVariantFromUInt32(
+                SensorState_Error,
+                &context->SensorProperties->List[DlxSensorState].Value);
+            WdfTimerStart(context->Timer, WDF_REL_TIMEOUT_IN_MS(1));
+        }
+        else
+        {
+            InitPropVariantFromUInt32(
+                SensorState_Active,
+                &context->SensorProperties->List[DlxSensorState].Value);
+        }
         WdfWaitLockRelease(context->Lock);
         WdfWaitLockRelease(context->LifecycleLock);
         return STATUS_SUCCESS;
@@ -879,7 +1194,6 @@ NTSTATUS DlxEvtSensorStart(_In_ SENSOROBJECT SensorInstance)
         ? RecoverSensorAfterReset(context, &firstDelayMs)
         : DlxLtrf216aSetEnabled(context->SpbIoTarget, true);
 
-    context->ClientRequestedStart = true;
     context->Started = true;
     context->FirstSample = true;
     context->InvalidSampleReported = false;
@@ -935,7 +1249,25 @@ NTSTATUS DlxStopSensor(
     if (!PreserveClientRequest)
     {
         Context->ClientRequestedStart = false;
+        Context->LastClientReportMs = 0;
     }
+
+    if (Context->BackgroundSampling &&
+        !PreserveClientRequest &&
+        !PoweringOff)
+    {
+        Context->FirstSample = true;
+        if (Context->SensorProperties != nullptr)
+        {
+            InitPropVariantFromUInt32(
+                SensorState_Active,
+                &Context->SensorProperties->List[DlxSensorState].Value);
+        }
+        WdfWaitLockRelease(Context->Lock);
+        WdfWaitLockRelease(Context->LifecycleLock);
+        return STATUS_SUCCESS;
+    }
+
     Context->Started = false;
     WdfWaitLockRelease(Context->Lock);
 
@@ -965,8 +1297,11 @@ NTSTATUS DlxStopSensor(
     Context->ConsecutiveNotReady = 0;
     Context->ConsecutiveNoSample = 0;
     Context->RecoveryAttempts = 0;
+    Context->NextRecoveryAttemptMs = 0;
+    Context->LastClientReportMs = 0;
     Context->InvalidSampleReported = false;
     Context->PendingInvalidReport = false;
+    InvalidateFusionSample(Context);
     if (Context->SensorProperties != nullptr)
     {
         InitPropVariantFromUInt32(
@@ -1073,7 +1408,7 @@ NTSTATUS DlxEvtSensorSetDataInterval(
         // rather than waiting for the previously scheduled due time.
         WdfTimerStart(
             context->Timer,
-            WDF_REL_TIMEOUT_IN_MS(DataRateMs));
+            WDF_REL_TIMEOUT_IN_MS(EffectiveSamplingInterval(context)));
     }
     WdfWaitLockRelease(context->Lock);
     return STATUS_SUCCESS;

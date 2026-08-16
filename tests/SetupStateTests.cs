@@ -30,6 +30,28 @@ namespace DeckLux.Setup.Tests
             ExpectValid(State(3, Platform("Galileo"), primary0));
             ExpectValid(State(3, Platform("Galileo"), primary0, secondary1));
 
+            ExpectInstalledValid(InstalledState(
+                3, true, false, Platform("Jupiter"), primary1));
+            ExpectInstalledValid(InstalledState(
+                3, true, false, Platform("Galileo"), primary0, secondary1));
+
+            ExpectInstalledInvalid(State(
+                3, Platform("Galileo"), primary0, secondary1));
+            ExpectInstalledInvalid(InstalledState(
+                2, true, false, Platform("Galileo"), primary0, secondary1));
+            ExpectInstalledInvalid(InstalledState(
+                3, false, false, Platform("Galileo"), primary0, secondary1));
+            ExpectInstalledInvalid(InstalledState(
+                3, true, true, Platform("Galileo"), primary0, secondary1));
+            ExpectInstalledInvalid(InstalledState(
+                3, "true", false, Platform("Galileo"), primary0, secondary1));
+            ExpectInstalledInvalid(InstalledState(
+                3, true, false, Platform("Galileo"), primary0));
+            ExpectInstalledInvalid(InstalledState(
+                3, true, false, Platform("Galileo"), secondary1, primary0));
+            ExpectInstalledInvalid(InstalledState(
+                3, true, false, Platform("Jupiter"), primary1, secondary1));
+
             ExpectInvalid("not-json");
             ExpectInvalid("null");
             ExpectInvalid(Serializer.Serialize(new Dictionary<string, object>
@@ -116,6 +138,28 @@ namespace DeckLux.Setup.Tests
             return Serializer.Serialize(root);
         }
 
+        private static string InstalledState(
+            object schema,
+            object completed,
+            object uninstalled,
+            Dictionary<string, object> platform,
+            params Dictionary<string, object>[] targets)
+        {
+            Dictionary<string, object> root = new Dictionary<string, object>
+            {
+                { "SchemaVersion", schema },
+                { "Project", "DeckLux" },
+                { "Completed", completed },
+                { "Uninstalled", uninstalled },
+                { "Targets", targets }
+            };
+            if (platform != null)
+            {
+                root.Add("Platform", platform);
+            }
+            return Serializer.Serialize(root);
+        }
+
         private static void ExpectValid(string json)
         {
             InstallerEngine.ValidateSupportedStateJson(json);
@@ -133,6 +177,25 @@ namespace DeckLux.Setup.Tests
             }
             throw new InvalidOperationException(
                 "Setup accepted an unsupported DeckLux state.");
+        }
+
+        private static void ExpectInstalledValid(string json)
+        {
+            InstallerEngine.ValidateInstalledDefaultStateJson(json);
+        }
+
+        private static void ExpectInstalledInvalid(string json)
+        {
+            try
+            {
+                InstallerEngine.ValidateInstalledDefaultStateJson(json);
+            }
+            catch (InvalidDataException)
+            {
+                return;
+            }
+            throw new InvalidOperationException(
+                "Setup accepted an invalid post-install DeckLux state.");
         }
 
         private static void ExpectRights(
