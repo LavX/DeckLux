@@ -257,7 +257,22 @@ bool TryGetFusionPairKey(
 
     PairKey[0] = L'\0';
     const WCHAR* leaf = wcsrchr(BiosName, L'.');
-    if (leaf == nullptr || leaf == BiosName)
+    if (leaf == nullptr)
+    {
+        const WCHAR* isolatedKey = nullptr;
+        if (_wcsicmp(BiosName, L"LTRF") == 0)
+        {
+            isolatedKey = L"unpaired:LTRF";
+        }
+        else if (_wcsicmp(BiosName, L"LTRS") == 0)
+        {
+            isolatedKey = L"unpaired:LTRS";
+        }
+
+        return isolatedKey != nullptr &&
+            SUCCEEDED(StringCchCopyW(PairKey, PairKeyCount, isolatedKey));
+    }
+    if (leaf == BiosName)
     {
         return false;
     }
@@ -295,32 +310,54 @@ void ResetFusionSamples(_Inout_ PDLX_FUSION_CHANNEL_STATE Channel)
     Channel->Valid = false;
 }
 
-ULONG FusionRangeScalePpm(_In_ PDLX_SENSOR_CONTEXT Context)
+struct DLX_FUSION_FIELD_METADATA
 {
-    if (Context == nullptr || Context->Role != DLX_DEVICE_ROLE::Primary)
+    ULONG MaximumScalePpm;
+    FLOAT Resolution;
+};
+
+DLX_FUSION_FIELD_METADATA FusionFieldMetadata(
+    _In_ PDLX_SENSOR_CONTEXT Context)
+{
+    DLX_FUSION_FIELD_METADATA metadata = {
+        DLX_CALIBRATION_SCALE_PPM_DEFAULT,
+        DlxLtrf216aResolution(DLX_CALIBRATION_SCALE_PPM_DEFAULT)
+    };
+    if (Context == nullptr)
     {
-        return Context == nullptr
-            ? DLX_CALIBRATION_SCALE_PPM_DEFAULT
-            : Context->CalibrationScalePpm;
+        return metadata;
+    }
+
+    metadata.MaximumScalePpm = Context->CalibrationScalePpm;
+    metadata.Resolution = DlxLtrf216aResolution(
+        Context->CalibrationScalePpm);
+    if (Context->Role != DLX_DEVICE_ROLE::Primary)
+    {
+        return metadata;
     }
 
     PDLX_DRIVER_CONTEXT driverContext = FusionContextForSensor(Context);
     if (driverContext == nullptr || driverContext->FusionLock == nullptr)
     {
-        return Context->CalibrationScalePpm;
+        return metadata;
     }
 
-    ULONG maximumScalePpm = Context->CalibrationScalePpm;
     WdfWaitLockAcquire(driverContext->FusionLock, nullptr);
     if (driverContext->Primary.OwnerDevice == Context->Device)
     {
-        maximumScalePpm = DlxFusionMaximumScalePpm(
+        const bool secondaryRegistered =
+            driverContext->Secondary.OwnerDevice != nullptr;
+        metadata.MaximumScalePpm = DlxFusionMaximumScalePpm(
             driverContext->Primary.CalibrationScalePpm,
-            driverContext->Secondary.OwnerDevice != nullptr,
+            secondaryRegistered,
+            driverContext->Secondary.CalibrationScalePpm);
+        metadata.Resolution = DlxFusionResolution(
+            driverContext->Primary.CalibrationScalePpm,
+            secondaryRegistered,
             driverContext->Secondary.CalibrationScalePpm);
     }
     WdfWaitLockRelease(driverContext->FusionLock);
-    return maximumScalePpm;
+    return metadata;
 }
 
 ULONG EffectiveSamplingInterval(_In_ PDLX_SENSOR_CONTEXT Context)
@@ -332,6 +369,7 @@ ULONG EffectiveSamplingInterval(_In_ PDLX_SENSOR_CONTEXT Context)
 
     return DlxFusionSamplingInterval(
         Context->BackgroundSampling,
+        Context->ClientRequestedStart,
         Context->IntervalMs,
         DLX_DEFAULT_INTERVAL_MS);
 }
@@ -1532,8 +1570,13 @@ NTSTATUS DlxEvtSensorGetDataFieldProperties(
     }
 
     WdfWaitLockAcquire(context->Lock, nullptr);
+    const DLX_FUSION_FIELD_METADATA metadata =
+        FusionFieldMetadata(context);
     InitPropVariantFromFloat(
-        DlxLtrf216aMaximumLux(FusionRangeScalePpm(context)),
+        metadata.Resolution,
+        &context->DataFieldProperties->List[DlxFieldResolution].Value);
+    InitPropVariantFromFloat(
+        DlxLtrf216aMaximumLux(metadata.MaximumScalePpm),
         &context->DataFieldProperties->List[DlxFieldRangeMaximum].Value);
     const NTSTATUS status = CopyCollection(
         context->DataFieldProperties,

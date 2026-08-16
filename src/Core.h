@@ -178,6 +178,28 @@ inline std::uint32_t DlxFusionMaximumScalePpm(
     return SecondaryScalePpm > primary ? SecondaryScalePpm : primary;
 }
 
+inline float DlxFusionResolution(
+    std::uint32_t PrimaryScalePpm,
+    bool SecondaryRegistered,
+    std::uint32_t SecondaryScalePpm)
+{
+    float resolution = DlxLtrf216aResolution(PrimaryScalePpm);
+    if (SecondaryRegistered &&
+        DlxIsCalibrationScalePpmValid(SecondaryScalePpm))
+    {
+        const float secondaryResolution =
+            DlxLtrf216aResolution(SecondaryScalePpm);
+        if (secondaryResolution < resolution)
+        {
+            resolution = secondaryResolution;
+        }
+    }
+
+    // A fresh two-sample temporal window reports the arithmetic midpoint, so
+    // the logical channel can resolve half of either physical sensor's step.
+    return resolution * 0.5f;
+}
+
 inline float DlxFusionMedian(
     const float Samples[DLX_FUSION_WINDOW_SIZE],
     std::uint32_t Count)
@@ -295,9 +317,15 @@ inline bool DlxFusionFreshMedian(
 
 inline std::uint32_t DlxFusionSamplingInterval(
     bool BackgroundSampling,
+    bool ClientRequestedStart,
     std::uint32_t ClientIntervalMs,
     std::uint32_t BackgroundIntervalMs)
 {
+    if (BackgroundSampling && !ClientRequestedStart)
+    {
+        return BackgroundIntervalMs;
+    }
+
     return BackgroundSampling && ClientIntervalMs > BackgroundIntervalMs
         ? BackgroundIntervalMs
         : ClientIntervalMs;

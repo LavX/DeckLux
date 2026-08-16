@@ -272,10 +272,22 @@ int main()
         DlxFusionMaximumScalePpm(23000000, true, 31000000) == 31000000,
         "fused range uses only registered channel calibrations");
     Check(
-        DlxFusionSamplingInterval(true, 5000, 250) == 250 &&
-            DlxFusionSamplingInterval(true, 100, 250) == 100 &&
-            DlxFusionSamplingInterval(false, 5000, 250) == 5000,
-        "background acquisition cadence is independent of slow client");
+        NearlyEqual(
+            DlxFusionResolution(23000000, false, 31000000),
+            DlxLtrf216aResolution(23000000) * 0.5f) &&
+        NearlyEqual(
+            DlxFusionResolution(23000000, true, 21000000),
+            DlxLtrf216aResolution(21000000) * 0.5f) &&
+        NearlyEqual(
+            DlxFusionResolution(23000000, true, 0),
+            DlxLtrf216aResolution(23000000) * 0.5f),
+        "fused resolution reflects registered channels and temporal midpoint");
+    Check(
+        DlxFusionSamplingInterval(true, true, 5000, 250) == 250 &&
+            DlxFusionSamplingInterval(true, true, 100, 250) == 100 &&
+            DlxFusionSamplingInterval(true, false, 100, 250) == 250 &&
+            DlxFusionSamplingInterval(false, false, 5000, 250) == 5000,
+        "background acquisition cadence follows active client state");
     Check(
         DlxFusionClientReportIsDue(1000, 0, 5000) &&
             !DlxFusionClientReportIsDue(5999, 1000, 5000) &&

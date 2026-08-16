@@ -112,17 +112,23 @@ Assert-DeckLuxReleaseTest `
     -Condition ($deviceHeaderText -match 'OwnerDevice' -and
         $deviceHeaderText -match 'FusionPairKey' -and
         $deviceText -match 'DlxRegisterFusionChannel' -and
-        $sensorText -match 'STATUS_DEVICE_CONFIGURATION_ERROR') `
-    -Message 'fusion coordinator rejects duplicate roles and mismatched ACPI pairs'
+        $sensorText -match 'STATUS_DEVICE_CONFIGURATION_ERROR' -and
+        $sensorText -match 'unpaired:LTRF' -and
+        $sensorText -match 'unpaired:LTRS') `
+    -Message 'fusion coordinator rejects duplicate or mismatched pairs while accepting isolated BIOS leaves'
 Assert-DeckLuxReleaseTest `
     -Condition ($deviceHeaderText -match 'SampleTimesMs' -and
         $sensorText -match 'DlxFusionFreshMedian' -and
         $sensorText -notmatch 'UpdatedAtMs') `
     -Message 'fusion median evaluates freshness for each stored sample'
 Assert-DeckLuxReleaseTest `
-    -Condition ($sensorText -match 'FusionRangeScalePpm' -and
+    -Condition ($sensorText -match 'FusionFieldMetadata' -and
+        $sensorText -match 'DlxFusionResolution' -and
         $sensorText -notmatch '(?s)DlxFieldRangeMaximum.*DLX_CALIBRATION_SCALE_PPM_MAXIMUM') `
-    -Message 'range maximum derives from the registered sensor calibrations'
+    -Message 'fused range and resolution derive from registered sensor calibrations'
+Assert-DeckLuxReleaseTest `
+    -Condition ($sensorText -match '(?s)DlxFusionSamplingInterval\(\s*Context->BackgroundSampling,\s*Context->ClientRequestedStart,') `
+    -Message 'secondary background cadence depends on client state rather than a stale requested interval'
 
 $installText = Get-Content -LiteralPath `
     (Join-Path $projectRoot 'scripts\Install-DeckLux.ps1') -Raw
