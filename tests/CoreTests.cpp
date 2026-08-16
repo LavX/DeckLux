@@ -274,14 +274,19 @@ int main()
     Check(
         NearlyEqual(
             DlxFusionResolution(23000000, false, 31000000),
-            DlxLtrf216aResolution(23000000) * 0.5f) &&
+            DlxLtrf216aResolution(23000000)) &&
         NearlyEqual(
             DlxFusionResolution(23000000, true, 21000000),
             DlxLtrf216aResolution(21000000) * 0.5f) &&
         NearlyEqual(
             DlxFusionResolution(23000000, true, 0),
-            DlxLtrf216aResolution(23000000) * 0.5f),
-        "fused resolution reflects registered channels and temporal midpoint");
+            DlxLtrf216aResolution(23000000)),
+        "resolution changes only for an active calibrated pair");
+    Check(
+        DlxFusionPairIsActive(true, true) &&
+            !DlxFusionPairIsActive(true, false) &&
+            !DlxFusionPairIsActive(false, true),
+        "fusion filtering requires both physical channels");
     Check(
         DlxFusionSamplingInterval(true, true, 5000, 250) == 250 &&
             DlxFusionSamplingInterval(true, true, 100, 250) == 100 &&

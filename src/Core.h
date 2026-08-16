@@ -184,20 +184,29 @@ inline float DlxFusionResolution(
     std::uint32_t SecondaryScalePpm)
 {
     float resolution = DlxLtrf216aResolution(PrimaryScalePpm);
-    if (SecondaryRegistered &&
-        DlxIsCalibrationScalePpmValid(SecondaryScalePpm))
+    if (!SecondaryRegistered ||
+        !DlxIsCalibrationScalePpmValid(SecondaryScalePpm))
     {
-        const float secondaryResolution =
-            DlxLtrf216aResolution(SecondaryScalePpm);
-        if (secondaryResolution < resolution)
-        {
-            resolution = secondaryResolution;
-        }
+        return resolution;
+    }
+
+    const float secondaryResolution =
+        DlxLtrf216aResolution(SecondaryScalePpm);
+    if (secondaryResolution < resolution)
+    {
+        resolution = secondaryResolution;
     }
 
     // A fresh two-sample temporal window reports the arithmetic midpoint, so
-    // the logical channel can resolve half of either physical sensor's step.
+    // an active fused pair can resolve half of either physical sensor's step.
     return resolution * 0.5f;
+}
+
+inline bool DlxFusionPairIsActive(
+    bool PrimaryRegistered,
+    bool SecondaryRegistered)
+{
+    return PrimaryRegistered && SecondaryRegistered;
 }
 
 inline float DlxFusionMedian(

@@ -235,6 +235,64 @@ NTSTATUS DlxQueryBiosName(
     return status;
 }
 
+NTSTATUS DlxQueryInstanceId(
+    _In_ WDFDEVICE Device,
+    _Out_writes_(InstanceIdCount) WCHAR* InstanceId,
+    _In_ size_t InstanceIdCount)
+{
+    if (Device == nullptr || InstanceId == nullptr || InstanceIdCount == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    InstanceId[0] = L'\0';
+
+    WDF_DEVICE_PROPERTY_DATA propertyData;
+    WDF_DEVICE_PROPERTY_DATA_INIT(
+        &propertyData,
+        &DEVPKEY_Device_InstanceId);
+
+    WDF_OBJECT_ATTRIBUTES memoryAttributes;
+    WDF_OBJECT_ATTRIBUTES_INIT(&memoryAttributes);
+    memoryAttributes.ParentObject = Device;
+
+    WDFMEMORY propertyMemory = nullptr;
+    DEVPROPTYPE propertyType = DEVPROP_TYPE_EMPTY;
+    NTSTATUS status = WdfDeviceAllocAndQueryPropertyEx(
+        Device,
+        &propertyData,
+        PagedPool,
+        &memoryAttributes,
+        &propertyMemory,
+        &propertyType);
+
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
+    size_t propertySize = 0;
+    const WCHAR* propertyValue = static_cast<const WCHAR*>(
+        WdfMemoryGetBuffer(propertyMemory, &propertySize));
+
+    if (propertyType != DEVPROP_TYPE_STRING ||
+        propertyValue == nullptr ||
+        propertySize < sizeof(WCHAR))
+    {
+        status = STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    else
+    {
+        status = StringCchCopyW(
+            InstanceId,
+            InstanceIdCount,
+            propertyValue);
+    }
+
+    WdfObjectDelete(propertyMemory);
+    return status;
+}
+
 NTSTATUS DlxQueryCalibrationScale(
     _In_ WDFDEVICE Device,
     _Out_ ULONG* CalibrationScalePpm)

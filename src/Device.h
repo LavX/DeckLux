@@ -141,6 +141,7 @@ typedef struct _DLX_SENSOR_CONTEXT
     ULONG CalibrationScalePpm;
     BYTE PartId;
     WCHAR BiosName[96];
+    WCHAR InstanceId[128];
 
     PSENSOR_PROPERTY_LIST SupportedDataFields;
     PSENSOR_COLLECTION_LIST EnumerationProperties;
@@ -196,6 +197,11 @@ NTSTATUS DlxQueryBiosName(
     _In_ WDFDEVICE Device,
     _Out_writes_(BiosNameCount) WCHAR* BiosName,
     _In_ size_t BiosNameCount);
+
+NTSTATUS DlxQueryInstanceId(
+    _In_ WDFDEVICE Device,
+    _Out_writes_(InstanceIdCount) WCHAR* InstanceId,
+    _In_ size_t InstanceIdCount);
 
 NTSTATUS DlxQueryCalibrationScale(
     _In_ WDFDEVICE Device,

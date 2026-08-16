@@ -112,10 +112,13 @@ Assert-DeckLuxReleaseTest `
     -Condition ($deviceHeaderText -match 'OwnerDevice' -and
         $deviceHeaderText -match 'FusionPairKey' -and
         $deviceText -match 'DlxRegisterFusionChannel' -and
+        $deviceText -match 'DlxQueryInstanceId' -and
         $sensorText -match 'STATUS_DEVICE_CONFIGURATION_ERROR' -and
+        $sensorText -match 'ACPI\\\\PRP0001\\\\0' -and
+        $sensorText -match 'ACPI\\\\PRP0001\\\\1' -and
         $sensorText -match 'unpaired:LTRF' -and
         $sensorText -match 'unpaired:LTRS') `
-    -Message 'fusion coordinator rejects duplicate or mismatched pairs while accepting isolated BIOS leaves'
+    -Message 'fusion coordinator keys the canonical Deck pair by instance identity and isolates unsupported leaves'
 Assert-DeckLuxReleaseTest `
     -Condition ($deviceHeaderText -match 'SampleTimesMs' -and
         $sensorText -match 'DlxFusionFreshMedian' -and
@@ -126,6 +129,9 @@ Assert-DeckLuxReleaseTest `
         $sensorText -match 'DlxFusionResolution' -and
         $sensorText -notmatch '(?s)DlxFieldRangeMaximum.*DLX_CALIBRATION_SCALE_PPM_MAXIMUM') `
     -Message 'fused range and resolution derive from registered sensor calibrations'
+Assert-DeckLuxReleaseTest `
+    -Condition ($sensorText -match '(?s)DlxFusionPairIsActive\(.*if \(!pairActive\).*return false;') `
+    -Message 'single-sensor primaries bypass temporal and spatial fusion'
 Assert-DeckLuxReleaseTest `
     -Condition ($sensorText -match '(?s)DlxFusionSamplingInterval\(\s*Context->BackgroundSampling,\s*Context->ClientRequestedStart,') `
     -Message 'secondary background cadence depends on client state rather than a stale requested interval'

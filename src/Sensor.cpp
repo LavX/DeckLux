@@ -247,24 +247,59 @@ PDLX_DRIVER_CONTEXT FusionContextForSensor(
 
 bool TryGetFusionPairKey(
     _In_z_ const WCHAR* BiosName,
+    _In_z_ const WCHAR* InstanceId,
+    _In_ DLX_DEVICE_ROLE Role,
     _Out_writes_(PairKeyCount) WCHAR* PairKey,
     _In_ size_t PairKeyCount)
 {
-    if (BiosName == nullptr || PairKey == nullptr || PairKeyCount == 0)
+    if (BiosName == nullptr || InstanceId == nullptr ||
+        PairKey == nullptr || PairKeyCount == 0)
     {
         return false;
     }
 
     PairKey[0] = L'\0';
-    const WCHAR* leaf = wcsrchr(BiosName, L'.');
-    if (leaf == nullptr)
+    const WCHAR* leafSeparator = wcsrchr(BiosName, L'.');
+    const WCHAR* leaf = leafSeparator == nullptr
+        ? BiosName
+        : leafSeparator + 1;
+    const bool isPrimaryLeaf =
+        Role == DLX_DEVICE_ROLE::Primary &&
+        _wcsicmp(leaf, L"LTRF") == 0;
+    const bool isSecondaryLeaf =
+        Role == DLX_DEVICE_ROLE::Secondary &&
+        _wcsicmp(leaf, L"LTRS") == 0;
+
+    const WCHAR* platformKey = nullptr;
+    if ((isPrimaryLeaf &&
+         _wcsicmp(InstanceId, L"ACPI\\PRP0001\\0") == 0) ||
+        (isSecondaryLeaf &&
+         _wcsicmp(InstanceId, L"ACPI\\PRP0001\\1") == 0))
+    {
+        platformKey = L"deck:galileo";
+    }
+    else if (isPrimaryLeaf &&
+             _wcsicmp(InstanceId, L"ACPI\\PRP0001\\1") == 0)
+    {
+        platformKey = L"deck:jupiter";
+    }
+
+    if (platformKey != nullptr)
+    {
+        return SUCCEEDED(StringCchCopyW(
+            PairKey,
+            PairKeyCount,
+            platformKey));
+    }
+
+    if (leafSeparator == nullptr)
     {
         const WCHAR* isolatedKey = nullptr;
-        if (_wcsicmp(BiosName, L"LTRF") == 0)
+        if (isPrimaryLeaf)
         {
             isolatedKey = L"unpaired:LTRF";
         }
-        else if (_wcsicmp(BiosName, L"LTRS") == 0)
+        else if (isSecondaryLeaf)
         {
             isolatedKey = L"unpaired:LTRS";
         }
@@ -272,12 +307,12 @@ bool TryGetFusionPairKey(
         return isolatedKey != nullptr &&
             SUCCEEDED(StringCchCopyW(PairKey, PairKeyCount, isolatedKey));
     }
-    if (leaf == BiosName)
+    if (leafSeparator == BiosName)
     {
         return false;
     }
 
-    const size_t length = static_cast<size_t>(leaf - BiosName);
+    const size_t length = static_cast<size_t>(leafSeparator - BiosName);
     if (length >= PairKeyCount)
     {
         return false;
@@ -343,17 +378,22 @@ DLX_FUSION_FIELD_METADATA FusionFieldMetadata(
     }
 
     WdfWaitLockAcquire(driverContext->FusionLock, nullptr);
-    if (driverContext->Primary.OwnerDevice == Context->Device)
+    const bool primaryRegistered =
+        driverContext->Primary.OwnerDevice == Context->Device;
+    const bool secondaryRegistered =
+        driverContext->Secondary.OwnerDevice != nullptr;
+    const bool pairActive = DlxFusionPairIsActive(
+        primaryRegistered,
+        secondaryRegistered);
+    if (primaryRegistered)
     {
-        const bool secondaryRegistered =
-            driverContext->Secondary.OwnerDevice != nullptr;
         metadata.MaximumScalePpm = DlxFusionMaximumScalePpm(
             driverContext->Primary.CalibrationScalePpm,
-            secondaryRegistered,
+            pairActive,
             driverContext->Secondary.CalibrationScalePpm);
         metadata.Resolution = DlxFusionResolution(
             driverContext->Primary.CalibrationScalePpm,
-            secondaryRegistered,
+            pairActive,
             driverContext->Secondary.CalibrationScalePpm);
     }
     WdfWaitLockRelease(driverContext->FusionLock);
@@ -467,6 +507,15 @@ bool TryGetFusedLux(
     FLOAT secondaryLux = 0.0f;
 
     WdfWaitLockAcquire(driverContext->FusionLock, nullptr);
+    const bool pairActive = DlxFusionPairIsActive(
+        driverContext->Primary.OwnerDevice == Context->Device,
+        driverContext->Secondary.OwnerDevice != nullptr);
+    if (!pairActive)
+    {
+        WdfWaitLockRelease(driverContext->FusionLock);
+        return false;
+    }
+
     if (driverContext->Primary.OwnerDevice == Context->Device &&
         driverContext->Primary.Valid)
     {
@@ -740,6 +789,8 @@ NTSTATUS DlxRegisterFusionChannel(_Inout_ PDLX_SENSOR_CONTEXT Context)
     WCHAR pairKey[ARRAYSIZE(Context->BiosName)] = {};
     if (!TryGetFusionPairKey(
             Context->BiosName,
+            Context->InstanceId,
+            Context->Role,
             pairKey,
             ARRAYSIZE(pairKey)))
     {
@@ -854,6 +905,7 @@ NTSTATUS DlxInitializeSensorContext(
     Context->CalibrationScalePpm = DLX_CALIBRATION_SCALE_PPM_DEFAULT;
     Context->PartId = 0;
     Context->BiosName[0] = L'\0';
+    Context->InstanceId[0] = L'\0';
 
     NTSTATUS status = DlxQueryBiosName(
         Device,
@@ -866,6 +918,18 @@ NTSTATUS DlxInitializeSensorContext(
             Context->BiosName,
             ARRAYSIZE(Context->BiosName),
             L"Explicitly opted-in LTR-F216A");
+    }
+
+    const NTSTATUS instanceStatus = DlxQueryInstanceId(
+        Device,
+        Context->InstanceId,
+        ARRAYSIZE(Context->InstanceId));
+    if (!NT_SUCCESS(instanceStatus))
+    {
+        DLX_TRACE_WARNING(
+            "Could not query device instance ID for %ls: 0x%08X",
+            Context->BiosName,
+            static_cast<ULONG>(instanceStatus));
     }
 
     Context->Role = DlxRoleFromBiosName(Context->BiosName);
