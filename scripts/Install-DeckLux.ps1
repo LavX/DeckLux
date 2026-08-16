@@ -55,6 +55,8 @@ foreach ($warningText in @($package.Warnings)) {
 $platform = Get-DeckLuxPlatformSnapshot
 $requestedIds = @($InstanceId | Sort-Object -Unique)
 $hasExplicitInstance = $requestedIds.Count -gt 0
+$installSecondaryByDefault =
+    $platform.IsKnownSteamDeck -and $platform.DeckProduct -ieq 'Galileo'
 if ($AllowCompatibleSensor -and -not $hasExplicitInstance) {
     throw '-AllowCompatibleSensor requires at least one exact -InstanceId; compatible hardware is never auto-selected.'
 }
@@ -98,7 +100,7 @@ else {
     }
     $selectedSnapshots += $primary[0]
 
-    if ($IncludeSecondary) {
+    if ($IncludeSecondary -or $installSecondaryByDefault) {
         $secondary = @($allSnapshots | Where-Object { $_.Role -eq 'Secondary' })
         if ($secondary.Count -ne 1) {
             throw "Expected exactly one Steam Deck LTRS secondary instance; found $($secondary.Count)."
@@ -117,9 +119,18 @@ foreach ($snapshot in $selectedSnapshots) {
         -AllowCompatibleSensor:$AllowCompatibleSensor
 }
 
-if ($selectedSnapshots.Count -gt 1 -and
-    $selectedSnapshots[0].Role -ne 'Primary') {
-    throw 'Multi-device installation order must begin with the LTRF primary sensor.'
+$isCanonicalGalileoPair =
+    $platform.IsKnownSteamDeck -and
+    $platform.DeckProduct -ieq 'Galileo' -and
+    $selectedSnapshots.Count -eq 2 -and
+    $selectedSnapshots[0].Role -eq 'Primary' -and
+    $selectedSnapshots[0].InstanceId -ieq 'ACPI\PRP0001\0' -and
+    ([string]$selectedSnapshots[0].BiosDeviceName -split '\.')[-1] -ieq 'LTRF' -and
+    $selectedSnapshots[1].Role -eq 'Secondary' -and
+    $selectedSnapshots[1].InstanceId -ieq 'ACPI\PRP0001\1' -and
+    ([string]$selectedSnapshots[1].BiosDeviceName -split '\.')[-1] -ieq 'LTRS'
+if ($selectedSnapshots.Count -gt 1 -and -not $isCanonicalGalileoPair) {
+    throw 'Multi-device installation is limited to the canonical Steam Deck OLED LTRF/LTRS pair.'
 }
 
 # Resolve and validate all firmware calibration before the first system

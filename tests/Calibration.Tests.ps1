@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 & (Join-Path $PSScriptRoot 'DeckLux.Common.Tests.ps1')
 & (Join-Path $PSScriptRoot 'DeckLux.Release.Tests.ps1')
 & (Join-Path $PSScriptRoot 'DeckLux.Setup.Tests.ps1')
+& (Join-Path $PSScriptRoot 'DeckLux.SensorComparison.Tests.ps1')
 
 Import-Module Pester -ErrorAction Stop
 $pesterResult = Invoke-Pester `

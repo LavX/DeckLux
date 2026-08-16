@@ -26,6 +26,7 @@ $requiredFiles = @(
     'THIRD_PARTY_NOTICES.md',
     'scripts\Install-DeckLux.ps1',
     'scripts\Uninstall-DeckLux.ps1',
+    'scripts\Compare-DeckLuxSensors.ps1',
     'scripts\New-DeckLuxRelease.ps1',
     'setup\DeckLux.Setup.cs',
     'setup\DeckLux.Setup.manifest')
@@ -50,30 +51,46 @@ $setupManifestText = Get-Content -LiteralPath `
     (Join-Path $projectRoot 'setup\DeckLux.Setup.manifest') -Raw
 $readmeText = Get-Content -LiteralPath `
     (Join-Path $projectRoot 'README.md') -Raw
+$deviceText = Get-Content -LiteralPath `
+    (Join-Path $projectRoot 'src\Device.cpp') -Raw
+$deviceHeaderText = Get-Content -LiteralPath `
+    (Join-Path $projectRoot 'src\Device.h') -Raw
+$sensorText = Get-Content -LiteralPath `
+    (Join-Path $projectRoot 'src\Sensor.cpp') -Raw
 
 Assert-DeckLuxReleaseTest `
-    -Condition ($infText -match '(?m)^DriverVer\s*=\s*[^,]+,1\.0\.0\.0\s*$') `
-    -Message 'INF reports driver version 1.0.0.0'
+    -Condition ($infText -match '(?m)^DriverVer\s*=\s*08/15/2026,1\.1\.0\.0\s*$') `
+    -Message 'INF reports the 1.1.0.0 release version and date'
 Assert-DeckLuxReleaseTest `
-    -Condition ($resourceText -match 'FILEVERSION 1,0,0,0' -and
-        $resourceText -match 'PRODUCTVERSION 1,0,0,0' -and
-        $resourceText -match '"FileVersion", "1\.0\.0\.0\\0"' -and
-        $resourceText -match '"ProductVersion", "1\.0\.0\.0\\0"') `
-    -Message 'DLL resource versions are 1.0.0.0'
+    -Condition ($resourceText -match 'FILEVERSION 1,1,0,0' -and
+        $resourceText -match 'PRODUCTVERSION 1,1,0,0' -and
+        $resourceText -match '"FileVersion", "1\.1\.0\.0\\0"' -and
+        $resourceText -match '"ProductVersion", "1\.1\.0\.0\\0"') `
+    -Message 'DLL resource versions are 1.1.0.0'
 Assert-DeckLuxReleaseTest `
-    -Condition ($setupText -match 'const string Version = "1\.0\.0"' -and
-        $setupText -match 'const string DriverVersion = "1\.0\.0\.0"') `
+    -Condition ($setupText -match 'const string Version = "1\.1\.0"' -and
+        $setupText -match 'const string DriverVersion = "1\.1\.0\.0"') `
     -Message 'setup version constants are consistent'
 Assert-DeckLuxReleaseTest `
-    -Condition ($setupManifestText -match 'assemblyIdentity version="1\.0\.0\.0"') `
-    -Message 'setup manifest version is 1.0.0.0'
+    -Condition ($setupManifestText -match 'assemblyIdentity version="1\.1\.0\.0"') `
+    -Message 'setup manifest version is 1.1.0.0'
 
 Assert-DeckLuxReleaseTest `
     -Condition ($setupText -notmatch 'IncludeSecondary|AllowCompatibleSensor') `
-    -Message 'graphical installer has no secondary or generic-device option'
+    -Message 'graphical installer has no topology or generic-device option'
 Assert-DeckLuxReleaseTest `
-    -Condition ($setupText -match 'primary LTRF sensor') `
-    -Message 'graphical installer identifies its primary-only scope'
+    -Condition ($setupText -match 'both sensors on Steam Deck OLED' -and
+        $setupText -match 'single sensor on Steam Deck LCD') `
+    -Message 'graphical installer describes the platform-default sensor topology'
+Assert-DeckLuxReleaseTest `
+    -Condition ($setupText -match 'ValidateInstalledDefaultState\(\);' -and
+        ([regex]::Matches($setupText, 'ValidateSupportedState\(\);')).Count -eq 1) `
+    -Message 'setup strictly validates new installs while preserving legacy uninstall validation'
+Assert-DeckLuxReleaseTest `
+    -Condition ((Get-Content -LiteralPath `
+        (Join-Path $projectRoot 'scripts\New-DeckLuxRelease.ps1') -Raw) `
+        -match "'scripts\\Compare-DeckLuxSensors\.ps1'") `
+    -Message 'release payload includes the dual-sensor comparator'
 Assert-DeckLuxReleaseTest `
     -Condition ($setupText -match 'CommonApplicationData' -and
         $setupText -match 'ProgramFiles') `
@@ -87,11 +104,55 @@ Assert-DeckLuxReleaseTest `
         $setupText -match 'SetupMutexName' -and
         $setupText -match 'HardenProtectedTree') `
     -Message 'setup validates JSON arrays, serializes transactions, and hardens persistent data'
+Assert-DeckLuxReleaseTest `
+    -Condition ($deviceText -notmatch 'WdfDeviceAssignS0IdleSettings\s*\(' -and
+        $deviceText -match 'BackgroundSampling') `
+    -Message 'secondary background sampling respects SensorsCx power-policy ownership'
+Assert-DeckLuxReleaseTest `
+    -Condition ($deviceHeaderText -match 'OwnerDevice' -and
+        $deviceHeaderText -match 'FusionPairKey' -and
+        $deviceText -match 'DlxRegisterFusionChannel' -and
+        $deviceText -match 'DlxQueryInstanceId' -and
+        $sensorText -match 'STATUS_DEVICE_CONFIGURATION_ERROR' -and
+        $sensorText -match 'ACPI\\\\PRP0001\\\\0' -and
+        $sensorText -match 'ACPI\\\\PRP0001\\\\1' -and
+        $sensorText -match 'unpaired:LTRF' -and
+        $sensorText -match 'unpaired:LTRS') `
+    -Message 'fusion coordinator keys the canonical Deck pair by instance identity and isolates unsupported leaves'
+Assert-DeckLuxReleaseTest `
+    -Condition ($deviceHeaderText -match 'SampleTimesMs' -and
+        $sensorText -match 'DlxFusionFreshMedian' -and
+        $sensorText -notmatch 'UpdatedAtMs') `
+    -Message 'fusion median evaluates freshness for each stored sample'
+Assert-DeckLuxReleaseTest `
+    -Condition ($sensorText -match 'FusionFieldMetadata' -and
+        $sensorText -match 'DlxFusionResolution' -and
+        $sensorText -notmatch '(?s)DlxFieldRangeMaximum.*DLX_CALIBRATION_SCALE_PPM_MAXIMUM') `
+    -Message 'fused range and resolution derive from registered sensor calibrations'
+Assert-DeckLuxReleaseTest `
+    -Condition ($sensorText -match '(?s)DlxFusionPairIsActive\(.*if \(!pairActive\).*return false;') `
+    -Message 'single-sensor primaries bypass temporal and spatial fusion'
+Assert-DeckLuxReleaseTest `
+    -Condition ($sensorText -match '(?s)DlxFusionSamplingInterval\(\s*Context->BackgroundSampling,\s*Context->ClientRequestedStart,') `
+    -Message 'secondary background cadence depends on client state rather than a stale requested interval'
 
 $installText = Get-Content -LiteralPath `
     (Join-Path $projectRoot 'scripts\Install-DeckLux.ps1') -Raw
 $uninstallText = Get-Content -LiteralPath `
     (Join-Path $projectRoot 'scripts\Uninstall-DeckLux.ps1') -Raw
+Assert-DeckLuxReleaseTest `
+    -Condition ($installText -match 'installSecondaryByDefault' -and
+        $installText -match "DeckProduct -ieq 'Galileo'" -and
+        $installText -match 'IncludeSecondary -or \$installSecondaryByDefault') `
+    -Message 'default installation selects Galileo secondary while Jupiter remains primary-only'
+Assert-DeckLuxReleaseTest `
+    -Condition ($installText -match '-IncludeSecondary cannot be combined with explicit -InstanceId' -and
+        $installText -match '(?s)if \(\$hasExplicitInstance\) \{\s*if \(\$IncludeSecondary\) \{') `
+    -Message 'explicit instance selection cannot be mixed with topology expansion'
+Assert-DeckLuxReleaseTest `
+    -Condition ($installText -match 'isCanonicalGalileoPair' -and
+        $installText -match 'Multi-device installation is limited to the canonical Steam Deck OLED LTRF/LTRS pair') `
+    -Message 'installer rejects multi-device topologies that the fusion singleton cannot represent'
 Assert-DeckLuxReleaseTest `
     -Condition ($installText -match 'BindingPreExisting' -and
         $installText -match 'BoundByInstaller' -and
@@ -138,7 +199,7 @@ try {
         Completed = $false
         Uninstalled = $false
         Package = [pscustomobject]@{
-            DriverVersion = '1.0.0.0'
+            DriverVersion = '1.1.0.0'
             PublishedInf = 'oem42.inf'
         }
         Targets = @()

@@ -33,6 +33,12 @@ constexpr std::uint32_t DLX_LTRF216A_RECOVERY_BACKOFF_MS = 2000;
 constexpr float DLX_LTRF216A_LUX_PER_COUNT = 0.15f;
 constexpr std::uint32_t DLX_LTRF216A_MAX_RAW_18BIT = 0x3FFFF;
 
+// Galileo has one calibrated LTR-F216A on each side of the display. A short
+// per-channel median rejects isolated spikes before the spatial selector uses
+// the brighter fresh channel to resist one-sided hand and shadow occlusion.
+constexpr std::uint32_t DLX_FUSION_WINDOW_SIZE = 3;
+constexpr std::uint64_t DLX_FUSION_MAX_SAMPLE_AGE_MS = 1000;
+
 // Calibration scales are persisted as unsigned parts-per-million so the
 // package does not depend on locale-specific floating-point serialization.
 constexpr std::uint32_t DLX_CALIBRATION_SCALE_PPM_DENOMINATOR = 1000000;
@@ -152,6 +158,239 @@ inline float DlxLtrf216aMaximumLux(std::uint32_t ScalePpm)
 {
     return static_cast<float>(DLX_LTRF216A_MAX_RAW_18BIT) *
            DlxLtrf216aResolution(ScalePpm);
+}
+
+inline std::uint32_t DlxFusionMaximumScalePpm(
+    std::uint32_t PrimaryScalePpm,
+    bool SecondaryRegistered,
+    std::uint32_t SecondaryScalePpm)
+{
+    const std::uint32_t primary =
+        DlxIsCalibrationScalePpmValid(PrimaryScalePpm)
+        ? PrimaryScalePpm
+        : DLX_CALIBRATION_SCALE_PPM_DEFAULT;
+    if (!SecondaryRegistered ||
+        !DlxIsCalibrationScalePpmValid(SecondaryScalePpm))
+    {
+        return primary;
+    }
+
+    return SecondaryScalePpm > primary ? SecondaryScalePpm : primary;
+}
+
+inline float DlxFusionResolution(
+    std::uint32_t PrimaryScalePpm,
+    bool SecondaryRegistered,
+    std::uint32_t SecondaryScalePpm)
+{
+    float resolution = DlxLtrf216aResolution(PrimaryScalePpm);
+    if (!SecondaryRegistered ||
+        !DlxIsCalibrationScalePpmValid(SecondaryScalePpm))
+    {
+        return resolution;
+    }
+
+    const float secondaryResolution =
+        DlxLtrf216aResolution(SecondaryScalePpm);
+    if (secondaryResolution < resolution)
+    {
+        resolution = secondaryResolution;
+    }
+
+    // A fresh two-sample temporal window reports the arithmetic midpoint, so
+    // an active fused pair can resolve half of either physical sensor's step.
+    return resolution * 0.5f;
+}
+
+inline bool DlxFusionPairIsActive(
+    bool PrimaryRegistered,
+    bool SecondaryRegistered)
+{
+    return PrimaryRegistered && SecondaryRegistered;
+}
+
+inline float DlxFusionMedian(
+    const float Samples[DLX_FUSION_WINDOW_SIZE],
+    std::uint32_t Count)
+{
+    if (Samples == nullptr || Count == 0 || Count > DLX_FUSION_WINDOW_SIZE)
+    {
+        return 0.0f;
+    }
+
+    if (Count == 1)
+    {
+        return Samples[0];
+    }
+
+    if (Count == 2)
+    {
+        return (Samples[0] + Samples[1]) * 0.5f;
+    }
+
+    const float a = Samples[0];
+    const float b = Samples[1];
+    const float c = Samples[2];
+    if ((a <= b && b <= c) || (c <= b && b <= a))
+    {
+        return b;
+    }
+    if ((b <= a && a <= c) || (c <= a && a <= b))
+    {
+        return a;
+    }
+    return c;
+}
+
+inline bool DlxFusionSampleIsFresh(
+    std::uint64_t NowMs,
+    std::uint64_t SampleMs,
+    std::uint64_t MaximumAgeMs = DLX_FUSION_MAX_SAMPLE_AGE_MS)
+{
+    return NowMs >= SampleMs && (NowMs - SampleMs) <= MaximumAgeMs;
+}
+
+inline bool DlxFusionPushSample(
+    float Samples[DLX_FUSION_WINDOW_SIZE],
+    std::uint64_t SampleTimesMs[DLX_FUSION_WINDOW_SIZE],
+    std::uint32_t* Count,
+    std::uint32_t* NextIndex,
+    float Sample,
+    std::uint64_t SampleMs)
+{
+    if (Samples == nullptr || SampleTimesMs == nullptr ||
+        Count == nullptr || NextIndex == nullptr ||
+        *Count > DLX_FUSION_WINDOW_SIZE ||
+        *NextIndex >= DLX_FUSION_WINDOW_SIZE ||
+        !std::isfinite(Sample) || Sample < 0.0f)
+    {
+        return false;
+    }
+
+    if (*Count == 0)
+    {
+        for (std::uint32_t index = 0;
+             index < DLX_FUSION_WINDOW_SIZE;
+             ++index)
+        {
+            Samples[index] = Sample;
+            SampleTimesMs[index] = SampleMs;
+        }
+        *Count = DLX_FUSION_WINDOW_SIZE;
+        *NextIndex = 0;
+        return true;
+    }
+
+    Samples[*NextIndex] = Sample;
+    SampleTimesMs[*NextIndex] = SampleMs;
+    *NextIndex = (*NextIndex + 1) % DLX_FUSION_WINDOW_SIZE;
+    return true;
+}
+
+inline bool DlxFusionFreshMedian(
+    const float Samples[DLX_FUSION_WINDOW_SIZE],
+    const std::uint64_t SampleTimesMs[DLX_FUSION_WINDOW_SIZE],
+    std::uint32_t Count,
+    std::uint64_t NowMs,
+    float* Median,
+    std::uint64_t MaximumAgeMs = DLX_FUSION_MAX_SAMPLE_AGE_MS)
+{
+    if (Samples == nullptr || SampleTimesMs == nullptr || Median == nullptr ||
+        Count == 0 || Count > DLX_FUSION_WINDOW_SIZE)
+    {
+        return false;
+    }
+
+    float freshSamples[DLX_FUSION_WINDOW_SIZE] = {};
+    std::uint32_t freshCount = 0;
+    for (std::uint32_t index = 0; index < Count; ++index)
+    {
+        if (std::isfinite(Samples[index]) && Samples[index] >= 0.0f &&
+            DlxFusionSampleIsFresh(
+                NowMs,
+                SampleTimesMs[index],
+                MaximumAgeMs))
+        {
+            freshSamples[freshCount++] = Samples[index];
+        }
+    }
+
+    if (freshCount == 0)
+    {
+        return false;
+    }
+
+    *Median = DlxFusionMedian(freshSamples, freshCount);
+    return std::isfinite(*Median) && *Median >= 0.0f;
+}
+
+inline std::uint32_t DlxFusionSamplingInterval(
+    bool BackgroundSampling,
+    bool ClientRequestedStart,
+    std::uint32_t ClientIntervalMs,
+    std::uint32_t BackgroundIntervalMs)
+{
+    if (BackgroundSampling && !ClientRequestedStart)
+    {
+        return BackgroundIntervalMs;
+    }
+
+    return BackgroundSampling && ClientIntervalMs > BackgroundIntervalMs
+        ? BackgroundIntervalMs
+        : ClientIntervalMs;
+}
+
+inline bool DlxFusionClientReportIsDue(
+    std::uint64_t NowMs,
+    std::uint64_t LastReportMs,
+    std::uint32_t ClientIntervalMs)
+{
+    return LastReportMs == 0 ||
+        (NowMs >= LastReportMs &&
+         NowMs - LastReportMs >= ClientIntervalMs);
+}
+
+inline std::uint32_t DlxFusionRecoveryTimerDelay(
+    std::uint32_t RecoveryDelayMs,
+    std::uint32_t SamplingDelayMs)
+{
+    return RecoveryDelayMs < SamplingDelayMs
+        ? RecoveryDelayMs
+        : SamplingDelayMs;
+}
+
+inline bool DlxFuseAmbientLux(
+    bool PrimaryValid,
+    float PrimaryLux,
+    bool SecondaryValid,
+    float SecondaryLux,
+    float* FusedLux)
+{
+    if (FusedLux == nullptr)
+    {
+        return false;
+    }
+
+    PrimaryValid = PrimaryValid && std::isfinite(PrimaryLux) && PrimaryLux >= 0.0f;
+    SecondaryValid = SecondaryValid && std::isfinite(SecondaryLux) && SecondaryLux >= 0.0f;
+    if (!PrimaryValid && !SecondaryValid)
+    {
+        return false;
+    }
+
+    if (!PrimaryValid)
+    {
+        *FusedLux = SecondaryLux;
+    }
+    else if (!SecondaryValid)
+    {
+        *FusedLux = PrimaryLux;
+    }
+    else
+    {
+        *FusedLux = PrimaryLux >= SecondaryLux ? PrimaryLux : SecondaryLux;
+    }
+    return true;
 }
 
 inline bool DlxShouldReportLux(

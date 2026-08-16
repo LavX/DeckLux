@@ -4,8 +4,8 @@
 #include <windows.h>
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,0,0
- PRODUCTVERSION 1,0,0,0
+ FILEVERSION 1,1,0,0
+ PRODUCTVERSION 1,1,0,0
  FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 #ifdef _DEBUG
  FILEFLAGS VS_FF_DEBUG
@@ -22,12 +22,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Laszlo Toth\0"
             VALUE "FileDescription", "DeckLux Steam Deck ambient-light sensor driver\0"
-            VALUE "FileVersion", "1.0.0.0\0"
+            VALUE "FileVersion", "1.1.0.0\0"
             VALUE "InternalName", "DeckLuxSensor\0"
             VALUE "LegalCopyright", "Copyright (c) 2026 Laszlo Toth <lavx@lavx.hu>\0"
             VALUE "OriginalFilename", "DeckLuxSensor.dll\0"
             VALUE "ProductName", "DeckLux\0"
-            VALUE "ProductVersion", "1.0.0.0\0"
+            VALUE "ProductVersion", "1.1.0.0\0"
             VALUE "Comments", "Original DeckLux work by Laszlo Toth <lavx@lavx.hu>\0"
         END
     END

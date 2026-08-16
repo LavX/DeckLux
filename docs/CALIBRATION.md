@@ -62,9 +62,9 @@ The important Jupiter exception is that its only sensor is index 0 but ACPI
 instance `:01`. On Galileo, index and ACPI-instance suffix are both 0 or 1.
 Never infer the OEM-string slot from the instance suffix alone.
 
-"Primary" and "alternate" are enumeration labels, not a claim that one
-physical sensor is optically superior. DeckLux installs only `LTRF` by default
-and exposes `LTRS` only through the explicit OLED-secondary path.
+"Primary" and "alternate" identify the firmware channels, not a claim that
+one physical sensor is optically superior. DeckLux installs both on Galileo;
+only the logical fused `LTRF` channel is preferred for Windows auto-brightness.
 
 ## Driver property contract
 
@@ -108,12 +108,38 @@ binding or Valve-specific calibration.
 
 ## Dual-sensor behavior
 
-DeckLux exposes Galileo's two physical sensors separately. It does not fuse,
-average, median-filter, or choose between them. Valve's Steam client exposes
-diagnostic fields named primary, alternate, and median, but its fusion
-algorithm is proprietary and is not specified by the public SteamOS Manager or
-Linux driver. Any future fusion belongs above the physical sensor driver and
-must consume independently calibrated values.
+Galileo is installed as two SensorCx objects in a dedicated shared UMDF host.
+`LTRF` is the sole primary and auto-brightness-preferred Windows sensor. It
+reports DeckLux's logical fused lux. `LTRS` remains nonpreferred and reports its
+own calibrated physical reading for diagnostics.
+
+Fusion is applied only after each physical raw count has been converted with
+that devnode's own factory scale. Each channel keeps its latest three valid lux
+samples, expires each sample separately after 1,000 ms, and uses the median of
+the remaining fresh values. At each preferred-channel report:
+
+1. A channel is eligible when its median is finite, nonnegative, and no more
+   than 1,000 ms old.
+2. If both channels are eligible, report the larger median.
+3. If one channel is eligible, report it unchanged.
+4. If neither channel is eligible, report an invalid sample.
+
+The short temporal median rejects isolated spikes. Selecting the brighter
+channel resists the expected failure mode where a hand or local shadow covers
+one bezel aperture. The secondary samples in the background while Windows is
+awake, even when no diagnostic application has opened it; ordinary system
+sleep still powers it down through the device lifecycle.
+
+Valve's public SteamOS Manager and upstream Linux driver expose and calibrate
+the physical IIO devices but do not publish Valve's user-space selection or
+filtering algorithm. The rule above is therefore the explicit DeckLux policy,
+not a claim of Valve parity.
+
+`scripts/Compare-DeckLuxSensors.ps1` observes the preferred fused channel and
+secondary raw channel in shared cycles. It correlates only valid readings whose
+sensor timestamps are within the selected skew and restores every temporary
+WinRT sampling property. Its pair deltas and ratios are diagnostics, not a
+brightness recommendation.
 
 ## Source record
 
@@ -129,6 +155,15 @@ must consume independently calibrated values.
   [lines 494-496](https://github.com/torvalds/linux/blob/2687c848e578/drivers/iio/light/ltrf216a.c#L494-L496)
   and the LTR-F216A multiplier is at
   [lines 548-550](https://github.com/torvalds/linux/blob/2687c848e578/drivers/iio/light/ltrf216a.c#L548-L550).
+- Microsoft's
+  [ambient-light sensor guidance](https://learn.microsoft.com/en-us/windows-hardware/design/component-guidelines/ambient-light-sensors#number-of-light-sensors)
+  recommends exposing multiple physical sensors used for occlusion handling as
+  one consolidated, auto-brightness-preferred logical sensor.
+- Microsoft's
+  [multi-ALS selection guidance](https://learn.microsoft.com/en-us/windows/win32/sensorsapi/handling-data-from-multiple-light-sensors)
+  recommends retaining recent timestamped readings, omitting stale channels,
+  and using the highest recent illuminance because that sensor is presumed
+  unobscured. DeckLux uses a stricter one-second freshness limit.
 - The archived Valve source-package mirror at pinned commit
   [`6d030343`](https://gitlab.com/evlaV/linux-integration/-/blob/6d030343b482bc42571b8686a7be37ff96da29c8/drivers/iio/light/ltrf216a.c#L198-208)
   preserves the old downstream formula and its

@@ -7,7 +7,7 @@ param(
     [string]$Configuration = 'Release',
 
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = '1.0.0',
+    [string]$Version = '1.1.0',
 
     [string]$EwdkRoot = 'E:',
 
@@ -120,6 +120,7 @@ try {
         'scripts\DeckLux.SmbiosCalibration.ps1' = (Join-Path $projectRoot 'scripts\DeckLux.SmbiosCalibration.ps1')
         'scripts\README.md' = (Join-Path $projectRoot 'scripts\README.md')
         'scripts\Test-DeckLuxSensor.ps1' = (Join-Path $projectRoot 'scripts\Test-DeckLuxSensor.ps1')
+        'scripts\Compare-DeckLuxSensors.ps1' = (Join-Path $projectRoot 'scripts\Compare-DeckLuxSensors.ps1')
         'scripts\Collect-DeckLuxDiagnostics.ps1' = (Join-Path $projectRoot 'scripts\Collect-DeckLuxDiagnostics.ps1')
         'scripts\Test-DeckLuxPackage.ps1' = (Join-Path $projectRoot 'scripts\Test-DeckLuxPackage.ps1')
         'README.md' = (Join-Path $projectRoot 'README.md')

@@ -235,6 +235,64 @@ NTSTATUS DlxQueryBiosName(
     return status;
 }
 
+NTSTATUS DlxQueryInstanceId(
+    _In_ WDFDEVICE Device,
+    _Out_writes_(InstanceIdCount) WCHAR* InstanceId,
+    _In_ size_t InstanceIdCount)
+{
+    if (Device == nullptr || InstanceId == nullptr || InstanceIdCount == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    InstanceId[0] = L'\0';
+
+    WDF_DEVICE_PROPERTY_DATA propertyData;
+    WDF_DEVICE_PROPERTY_DATA_INIT(
+        &propertyData,
+        &DEVPKEY_Device_InstanceId);
+
+    WDF_OBJECT_ATTRIBUTES memoryAttributes;
+    WDF_OBJECT_ATTRIBUTES_INIT(&memoryAttributes);
+    memoryAttributes.ParentObject = Device;
+
+    WDFMEMORY propertyMemory = nullptr;
+    DEVPROPTYPE propertyType = DEVPROP_TYPE_EMPTY;
+    NTSTATUS status = WdfDeviceAllocAndQueryPropertyEx(
+        Device,
+        &propertyData,
+        PagedPool,
+        &memoryAttributes,
+        &propertyMemory,
+        &propertyType);
+
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
+    size_t propertySize = 0;
+    const WCHAR* propertyValue = static_cast<const WCHAR*>(
+        WdfMemoryGetBuffer(propertyMemory, &propertySize));
+
+    if (propertyType != DEVPROP_TYPE_STRING ||
+        propertyValue == nullptr ||
+        propertySize < sizeof(WCHAR))
+    {
+        status = STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    else
+    {
+        status = StringCchCopyW(
+            InstanceId,
+            InstanceIdCount,
+            propertyValue);
+    }
+
+    WdfObjectDelete(propertyMemory);
+    return status;
+}
+
 NTSTATUS DlxQueryCalibrationScale(
     _In_ WDFDEVICE Device,
     _Out_ ULONG* CalibrationScalePpm)
@@ -358,6 +416,10 @@ NTSTATUS DlxEvtDeviceAdd(
         return status;
     }
 
+    // Do not override S0 idle settings here. SensorsCx rejected that request
+    // for Galileo's alternate stack. Background acquisition runs while the
+    // stack is in D0, and D0Exit still quiesces the hardware.
+
     SENSOR_CONTROLLER_CONFIG sensorConfig;
     SENSOR_CONTROLLER_CONFIG_INIT(&sensorConfig);
     sensorConfig.DriverIsPowerPolicyOwner = WdfUseDefault;
@@ -440,6 +502,11 @@ NTSTATUS DlxEvtPrepareHardware(
 
     if (NT_SUCCESS(status))
     {
+        status = DlxRegisterFusionChannel(context);
+    }
+
+    if (NT_SUCCESS(status))
+    {
         SENSOR_CONFIG sensorConfig;
         SENSOR_CONFIG_INIT(&sensorConfig);
         sensorConfig.pEnumerationList = context->EnumerationProperties;
@@ -448,6 +515,7 @@ NTSTATUS DlxEvtPrepareHardware(
 
     if (!NT_SUCCESS(status))
     {
+        DlxUnregisterFusionChannel(context);
         DLX_TRACE_ERROR(
             "PrepareHardware failed for %ls: 0x%08X",
             context->BiosName,
@@ -474,6 +542,7 @@ NTSTATUS DlxEvtReleaseHardware(
     // the only teardown callback allowed to disable the chip; here we only
     // quiesce software state before closing and deleting the SPB target.
     (void)DlxStopSensor(context, false, false, true);
+    DlxUnregisterFusionChannel(context);
 
     if (context->SpbIoTarget != nullptr)
     {
@@ -647,6 +716,7 @@ NTSTATUS DlxPowerOn(_Inout_ PDLX_SENSOR_CONTEXT Context)
     Context->ConsecutiveNotReady = 0;
     Context->ConsecutiveNoSample = 0;
     Context->RecoveryAttempts = 0;
+    Context->NextRecoveryAttemptMs = 0;
 
     if (NT_SUCCESS(status))
     {
@@ -655,7 +725,7 @@ NTSTATUS DlxPowerOn(_Inout_ PDLX_SENSOR_CONTEXT Context)
         Context->RecoveryPending = false;
         Context->PendingInvalidReport = false;
 
-        if (Context->ClientRequestedStart)
+        if (Context->ClientRequestedStart || Context->BackgroundSampling)
         {
             status = DlxLtrf216aSetEnabled(Context->SpbIoTarget, true);
             Context->Started = true;
@@ -700,7 +770,8 @@ NTSTATUS DlxPowerOn(_Inout_ PDLX_SENSOR_CONTEXT Context)
         // and retry safely; each recovery probes again before its first write.
         Context->PoweredOn = true;
         Context->RecoveryPending = true;
-        Context->Started = Context->ClientRequestedStart;
+        Context->Started =
+            Context->ClientRequestedStart || Context->BackgroundSampling;
         InitPropVariantFromUInt32(
             SensorState_Error,
             &Context->SensorProperties->List[DlxSensorState].Value);

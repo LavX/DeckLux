@@ -167,6 +167,191 @@ int main()
             0.01f),
         "invalid calibration range uses nominal fallback");
 
+    const float oneFusionSample[DLX_FUSION_WINDOW_SIZE] = { 12.0f, 0.0f, 0.0f };
+    Check(
+        NearlyEqual(DlxFusionMedian(oneFusionSample, 1), 12.0f),
+        "one-sample fusion window");
+    const float twoFusionSamples[DLX_FUSION_WINDOW_SIZE] = { 10.0f, 14.0f, 0.0f };
+    Check(
+        NearlyEqual(DlxFusionMedian(twoFusionSamples, 2), 12.0f),
+        "two-sample fusion window average");
+    const float threeFusionSamples[DLX_FUSION_WINDOW_SIZE] = { 200.0f, 12.0f, 14.0f };
+    Check(
+        NearlyEqual(DlxFusionMedian(threeFusionSamples, 3), 14.0f),
+        "three-sample fusion window rejects spike");
+    Check(
+        DlxFusionSampleIsFresh(2000, 1000),
+        "fusion sample accepted at age limit");
+    Check(
+        !DlxFusionSampleIsFresh(2001, 1000),
+        "fusion sample rejected beyond age limit");
+    Check(
+        !DlxFusionSampleIsFresh(999, 1000),
+        "future fusion sample rejected");
+
+    float seededWindow[DLX_FUSION_WINDOW_SIZE] = {};
+    std::uint64_t seededTimes[DLX_FUSION_WINDOW_SIZE] = {};
+    std::uint32_t seededCount = 0;
+    std::uint32_t seededNext = 0;
+    Check(
+        DlxFusionPushSample(
+            seededWindow,
+            seededTimes,
+            &seededCount,
+            &seededNext,
+            10.0f,
+            1000) &&
+            seededCount == DLX_FUSION_WINDOW_SIZE &&
+            seededNext == 0 &&
+            NearlyEqual(DlxFusionMedian(seededWindow, seededCount), 10.0f),
+        "first fusion sample seeds complete median window");
+    Check(
+        DlxFusionPushSample(
+            seededWindow,
+            seededTimes,
+            &seededCount,
+            &seededNext,
+            1000.0f,
+            1100) &&
+            seededNext == 1 &&
+            NearlyEqual(DlxFusionMedian(seededWindow, seededCount), 10.0f),
+        "seeded median rejects second-sample spike");
+    Check(
+        DlxFusionPushSample(
+            seededWindow,
+            seededTimes,
+            &seededCount,
+            &seededNext,
+            12.0f,
+            1200) &&
+        DlxFusionPushSample(
+            seededWindow,
+            seededTimes,
+            &seededCount,
+            &seededNext,
+            14.0f,
+            1300) &&
+            seededNext == 0 &&
+            NearlyEqual(DlxFusionMedian(seededWindow, seededCount), 14.0f),
+        "fusion window rotates across all three slots");
+    Check(
+        !DlxFusionPushSample(
+            seededWindow,
+            seededTimes,
+            &seededCount,
+            &seededNext,
+            std::numeric_limits<float>::infinity(),
+            1400),
+        "fusion window rejects non-finite sample");
+
+    const float expirySamples[DLX_FUSION_WINDOW_SIZE] =
+        { 10.0f, 10.0f, 100.0f };
+    const std::uint64_t expiryTimes[DLX_FUSION_WINDOW_SIZE] =
+        { 1000, 1000, 6000 };
+    float freshMedian = 0.0f;
+    Check(
+        DlxFusionFreshMedian(
+            expirySamples,
+            expiryTimes,
+            DLX_FUSION_WINDOW_SIZE,
+            6000,
+            &freshMedian) &&
+            NearlyEqual(freshMedian, 100.0f),
+        "fusion median excludes individually expired samples");
+    Check(
+        !DlxFusionFreshMedian(
+            expirySamples,
+            expiryTimes,
+            DLX_FUSION_WINDOW_SIZE,
+            7001,
+            &freshMedian),
+        "fusion median rejects a fully expired channel");
+    Check(
+        DlxFusionMaximumScalePpm(23000000, false, 31000000) == 23000000 &&
+        DlxFusionMaximumScalePpm(23000000, true, 21000000) == 23000000 &&
+        DlxFusionMaximumScalePpm(23000000, true, 31000000) == 31000000,
+        "fused range uses only registered channel calibrations");
+    Check(
+        NearlyEqual(
+            DlxFusionResolution(23000000, false, 31000000),
+            DlxLtrf216aResolution(23000000)) &&
+        NearlyEqual(
+            DlxFusionResolution(23000000, true, 21000000),
+            DlxLtrf216aResolution(21000000) * 0.5f) &&
+        NearlyEqual(
+            DlxFusionResolution(23000000, true, 0),
+            DlxLtrf216aResolution(23000000)),
+        "resolution changes only for an active calibrated pair");
+    Check(
+        DlxFusionPairIsActive(true, true) &&
+            !DlxFusionPairIsActive(true, false) &&
+            !DlxFusionPairIsActive(false, true),
+        "fusion filtering requires both physical channels");
+    Check(
+        DlxFusionSamplingInterval(true, true, 5000, 250) == 250 &&
+            DlxFusionSamplingInterval(true, true, 100, 250) == 100 &&
+            DlxFusionSamplingInterval(true, false, 100, 250) == 250 &&
+            DlxFusionSamplingInterval(false, false, 5000, 250) == 5000,
+        "background acquisition cadence follows active client state");
+    Check(
+        DlxFusionClientReportIsDue(1000, 0, 5000) &&
+            !DlxFusionClientReportIsDue(5999, 1000, 5000) &&
+            DlxFusionClientReportIsDue(6000, 1000, 5000) &&
+            !DlxFusionClientReportIsDue(999, 1000, 5000),
+        "diagnostic report cadence honors client interval");
+    Check(
+        DlxFusionRecoveryTimerDelay(2000, 250) == 250 &&
+            DlxFusionRecoveryTimerDelay(120, 250) == 120,
+        "fallback reporting preserves recovery backoff boundary");
+
+    float fusedLux = -1.0f;
+    Check(
+        DlxFuseAmbientLux(true, 40.0f, true, 5.0f, &fusedLux) &&
+            NearlyEqual(fusedLux, 40.0f),
+        "fusion rejects lower occluded channel");
+    Check(
+        DlxFuseAmbientLux(true, 5.0f, true, 40.0f, &fusedLux) &&
+            NearlyEqual(fusedLux, 40.0f),
+        "fusion uses brighter alternate channel");
+    Check(
+        DlxFuseAmbientLux(false, 0.0f, true, 25.0f, &fusedLux) &&
+            NearlyEqual(fusedLux, 25.0f),
+        "fusion falls back to healthy secondary");
+    Check(
+        DlxFuseAmbientLux(true, 25.0f, false, 0.0f, &fusedLux) &&
+            NearlyEqual(fusedLux, 25.0f),
+        "fusion falls back to healthy primary");
+    Check(
+        !DlxFuseAmbientLux(false, 0.0f, false, 0.0f, &fusedLux),
+        "fusion rejects two invalid channels");
+    Check(
+        !DlxFuseAmbientLux(
+            true,
+            std::numeric_limits<float>::quiet_NaN(),
+            false,
+            0.0f,
+            &fusedLux),
+        "fusion rejects non-finite input");
+    Check(
+        DlxFuseAmbientLux(
+            true,
+            std::numeric_limits<float>::infinity(),
+            true,
+            18.0f,
+            &fusedLux) && NearlyEqual(fusedLux, 18.0f),
+        "fusion ignores non-finite channel when peer is valid");
+    Check(
+        DlxFuseAmbientLux(
+            true,
+            -1.0f,
+            true,
+            18.0f,
+            &fusedLux) && NearlyEqual(fusedLux, 18.0f),
+        "fusion ignores negative channel when peer is valid");
+    Check(
+        !DlxFuseAmbientLux(true, 18.0f, true, 20.0f, nullptr),
+        "fusion requires output storage");
+
     Check(
         DlxShouldReportLux(true, true, 100.0f, 100.0f, 0.25f, 1.0f),
         "first sample always reports");
