@@ -86,9 +86,11 @@ enum DLX_THRESHOLD_INDEX
 typedef struct _DLX_FUSION_CHANNEL_STATE
 {
     FLOAT Samples[DLX_FUSION_WINDOW_SIZE];
+    ULONGLONG SampleTimesMs[DLX_FUSION_WINDOW_SIZE];
     std::uint32_t SampleCount;
     std::uint32_t NextSampleIndex;
-    ULONGLONG UpdatedAtMs;
+    WDFDEVICE OwnerDevice;
+    ULONG CalibrationScalePpm;
     bool Valid;
 } DLX_FUSION_CHANNEL_STATE, *PDLX_FUSION_CHANNEL_STATE;
 
@@ -97,6 +99,7 @@ typedef struct _DLX_DRIVER_CONTEXT
     WDFWAITLOCK FusionLock;
     DLX_FUSION_CHANNEL_STATE Primary;
     DLX_FUSION_CHANNEL_STATE Secondary;
+    WCHAR FusionPairKey[96];
 } DLX_DRIVER_CONTEXT, *PDLX_DRIVER_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DLX_DRIVER_CONTEXT, DlxGetDriverContext);
@@ -171,6 +174,9 @@ NTSTATUS DlxInitializeSensorContext(
     _In_ WDFDEVICE Device,
     _In_ SENSOROBJECT SensorInstance,
     _Out_ PDLX_SENSOR_CONTEXT Context);
+
+NTSTATUS DlxRegisterFusionChannel(_Inout_ PDLX_SENSOR_CONTEXT Context);
+VOID DlxUnregisterFusionChannel(_Inout_ PDLX_SENSOR_CONTEXT Context);
 
 NTSTATUS DlxConfigureSpbTarget(
     _Inout_ PDLX_SENSOR_CONTEXT Context,

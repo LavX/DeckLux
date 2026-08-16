@@ -115,7 +115,8 @@ own calibrated physical reading for diagnostics.
 
 Fusion is applied only after each physical raw count has been converted with
 that devnode's own factory scale. Each channel keeps its latest three valid lux
-samples and uses their median. At each preferred-channel report:
+samples, expires each sample separately after 1,000 ms, and uses the median of
+the remaining fresh values. At each preferred-channel report:
 
 1. A channel is eligible when its median is finite, nonnegative, and no more
    than 1,000 ms old.

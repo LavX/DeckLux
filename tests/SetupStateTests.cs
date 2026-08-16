@@ -22,6 +22,14 @@ namespace DeckLux.Setup.Tests
                 Target("Primary", "LTRF", @"ACPI\PRP0001\1");
             Dictionary<string, object> secondary1 =
                 Target("Secondary", "LTRS", @"ACPI\PRP0001\1");
+            Dictionary<string, object> baseboardGalileo =
+                BaseboardPlatform("Galileo");
+            Dictionary<string, object> baseboardJupiter =
+                BaseboardPlatform("Jupiter");
+            Dictionary<string, object> conflictingGalileo =
+                Platform("Galileo");
+            conflictingGalileo.Add("BaseBoardManufacturer", "Valve");
+            conflictingGalileo.Add("BaseBoardProduct", "Jupiter");
 
             ExpectValid(State(1, null, primary0));
             ExpectValid(State(2, null, primary1));
@@ -29,11 +37,18 @@ namespace DeckLux.Setup.Tests
             ExpectValid(State(3, Platform("Jupiter"), primary1));
             ExpectValid(State(3, Platform("Galileo"), primary0));
             ExpectValid(State(3, Platform("Galileo"), primary0, secondary1));
+            ExpectValid(State(
+                3, baseboardJupiter, primary1));
+            ExpectValid(State(
+                3, baseboardGalileo, primary0, secondary1));
 
             ExpectInstalledValid(InstalledState(
                 3, true, false, Platform("Jupiter"), primary1));
             ExpectInstalledValid(InstalledState(
                 3, true, false, Platform("Galileo"), primary0, secondary1));
+            ExpectInstalledValid(InstalledState(
+                3, true, false, BaseboardPlatform("Galileo"),
+                primary0, secondary1));
 
             ExpectInstalledInvalid(State(
                 3, Platform("Galileo"), primary0, secondary1));
@@ -63,6 +78,8 @@ namespace DeckLux.Setup.Tests
             ExpectInvalid(State(4, Platform("Galileo"), primary0));
             ExpectInvalid(State(3, null, primary0));
             ExpectInvalid(State(3, Platform("Neptune"), primary0));
+            ExpectInvalid(State(
+                3, conflictingGalileo, primary0, secondary1));
             ExpectInvalid(State(3, Platform("Jupiter"), primary0));
             ExpectInvalid(State(3, Platform("Galileo"), secondary1));
             ExpectInvalid(State(3, Platform("Galileo"), primary1));
@@ -117,6 +134,18 @@ namespace DeckLux.Setup.Tests
             {
                 { "SystemManufacturer", "Valve" },
                 { "SystemProductName", product }
+            };
+        }
+
+        private static Dictionary<string, object> BaseboardPlatform(string product)
+        {
+            return new Dictionary<string, object>
+            {
+                { "DeckProduct", product },
+                { "SystemManufacturer", "Example" },
+                { "SystemProductName", "ExampleProduct" },
+                { "BaseBoardManufacturer", "Valve" },
+                { "BaseBoardProduct", product }
             };
         }
 

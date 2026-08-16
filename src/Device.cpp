@@ -444,6 +444,11 @@ NTSTATUS DlxEvtPrepareHardware(
 
     if (NT_SUCCESS(status))
     {
+        status = DlxRegisterFusionChannel(context);
+    }
+
+    if (NT_SUCCESS(status))
+    {
         SENSOR_CONFIG sensorConfig;
         SENSOR_CONFIG_INIT(&sensorConfig);
         sensorConfig.pEnumerationList = context->EnumerationProperties;
@@ -452,6 +457,7 @@ NTSTATUS DlxEvtPrepareHardware(
 
     if (!NT_SUCCESS(status))
     {
+        DlxUnregisterFusionChannel(context);
         DLX_TRACE_ERROR(
             "PrepareHardware failed for %ls: 0x%08X",
             context->BiosName,
@@ -478,6 +484,7 @@ NTSTATUS DlxEvtReleaseHardware(
     // the only teardown callback allowed to disable the chip; here we only
     // quiesce software state before closing and deleting the SPB target.
     (void)DlxStopSensor(context, false, false, true);
+    DlxUnregisterFusionChannel(context);
 
     if (context->SpbIoTarget != nullptr)
     {

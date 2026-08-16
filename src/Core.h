@@ -160,6 +160,24 @@ inline float DlxLtrf216aMaximumLux(std::uint32_t ScalePpm)
            DlxLtrf216aResolution(ScalePpm);
 }
 
+inline std::uint32_t DlxFusionMaximumScalePpm(
+    std::uint32_t PrimaryScalePpm,
+    bool SecondaryRegistered,
+    std::uint32_t SecondaryScalePpm)
+{
+    const std::uint32_t primary =
+        DlxIsCalibrationScalePpmValid(PrimaryScalePpm)
+        ? PrimaryScalePpm
+        : DLX_CALIBRATION_SCALE_PPM_DEFAULT;
+    if (!SecondaryRegistered ||
+        !DlxIsCalibrationScalePpmValid(SecondaryScalePpm))
+    {
+        return primary;
+    }
+
+    return SecondaryScalePpm > primary ? SecondaryScalePpm : primary;
+}
+
 inline float DlxFusionMedian(
     const float Samples[DLX_FUSION_WINDOW_SIZE],
     std::uint32_t Count)
@@ -203,11 +221,14 @@ inline bool DlxFusionSampleIsFresh(
 
 inline bool DlxFusionPushSample(
     float Samples[DLX_FUSION_WINDOW_SIZE],
+    std::uint64_t SampleTimesMs[DLX_FUSION_WINDOW_SIZE],
     std::uint32_t* Count,
     std::uint32_t* NextIndex,
-    float Sample)
+    float Sample,
+    std::uint64_t SampleMs)
 {
-    if (Samples == nullptr || Count == nullptr || NextIndex == nullptr ||
+    if (Samples == nullptr || SampleTimesMs == nullptr ||
+        Count == nullptr || NextIndex == nullptr ||
         *Count > DLX_FUSION_WINDOW_SIZE ||
         *NextIndex >= DLX_FUSION_WINDOW_SIZE ||
         !std::isfinite(Sample) || Sample < 0.0f)
@@ -222,6 +243,7 @@ inline bool DlxFusionPushSample(
              ++index)
         {
             Samples[index] = Sample;
+            SampleTimesMs[index] = SampleMs;
         }
         *Count = DLX_FUSION_WINDOW_SIZE;
         *NextIndex = 0;
@@ -229,8 +251,46 @@ inline bool DlxFusionPushSample(
     }
 
     Samples[*NextIndex] = Sample;
+    SampleTimesMs[*NextIndex] = SampleMs;
     *NextIndex = (*NextIndex + 1) % DLX_FUSION_WINDOW_SIZE;
     return true;
+}
+
+inline bool DlxFusionFreshMedian(
+    const float Samples[DLX_FUSION_WINDOW_SIZE],
+    const std::uint64_t SampleTimesMs[DLX_FUSION_WINDOW_SIZE],
+    std::uint32_t Count,
+    std::uint64_t NowMs,
+    float* Median,
+    std::uint64_t MaximumAgeMs = DLX_FUSION_MAX_SAMPLE_AGE_MS)
+{
+    if (Samples == nullptr || SampleTimesMs == nullptr || Median == nullptr ||
+        Count == 0 || Count > DLX_FUSION_WINDOW_SIZE)
+    {
+        return false;
+    }
+
+    float freshSamples[DLX_FUSION_WINDOW_SIZE] = {};
+    std::uint32_t freshCount = 0;
+    for (std::uint32_t index = 0; index < Count; ++index)
+    {
+        if (std::isfinite(Samples[index]) && Samples[index] >= 0.0f &&
+            DlxFusionSampleIsFresh(
+                NowMs,
+                SampleTimesMs[index],
+                MaximumAgeMs))
+        {
+            freshSamples[freshCount++] = Samples[index];
+        }
+    }
+
+    if (freshCount == 0)
+    {
+        return false;
+    }
+
+    *Median = DlxFusionMedian(freshSamples, freshCount);
+    return std::isfinite(*Median) && *Median >= 0.0f;
 }
 
 inline std::uint32_t DlxFusionSamplingInterval(

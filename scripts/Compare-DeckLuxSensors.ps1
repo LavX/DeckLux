@@ -139,13 +139,15 @@ function Get-DeckLuxPlatformIdentity {
         }
     }
 
-    $systemMatches = $systemManufacturer -ieq 'Valve' -and
-        $systemProductName -ieq 'Galileo'
-    $boardContradicts =
-        (-not [string]::IsNullOrWhiteSpace($baseBoardManufacturer) -and
-         $baseBoardManufacturer -ine 'Valve') -or
-        (-not [string]::IsNullOrWhiteSpace($baseBoardProduct) -and
-         $baseBoardProduct -ine 'Galileo')
+    $knownProducts = @('Jupiter', 'Galileo')
+    $systemIsKnown = $systemManufacturer -ieq 'Valve' -and
+        $knownProducts -icontains $systemProductName
+    $boardIsKnown = $baseBoardManufacturer -ieq 'Valve' -and
+        $knownProducts -icontains $baseBoardProduct
+    $systemMatches = $systemIsKnown -and $systemProductName -ieq 'Galileo'
+    $boardMatches = $boardIsKnown -and $baseBoardProduct -ieq 'Galileo'
+    $identitiesConflict = $systemIsKnown -and $boardIsKnown -and
+        $systemProductName -ine $baseBoardProduct
 
     return [pscustomobject][ordered]@{
         Source = $source
@@ -154,7 +156,8 @@ function Get-DeckLuxPlatformIdentity {
         SystemFamily = $systemFamily
         BaseBoardManufacturer = $baseBoardManufacturer
         BaseBoardProduct = $baseBoardProduct
-        IsValveGalileo = [bool]($systemMatches -and -not $boardContradicts)
+        IsValveGalileo = [bool](
+            ($systemMatches -or $boardMatches) -and -not $identitiesConflict)
     }
 }
 

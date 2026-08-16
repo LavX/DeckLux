@@ -94,11 +94,12 @@ sensor; `1,000,000` represents scale `1.0`. DeckLux never adds or averages the
 `LTRF` and `LTRS` calibration constants. It calibrates each reading first, then
 fuses the resulting lux values.
 
-On OLED, each channel has a three-reading temporal median. When both medians are
-fresh (no more than one second old), the preferred channel reports the brighter
-one. If either sensor is unavailable or stale, it reports the healthy channel;
-if neither is valid, it reports an invalid sample. This is DeckLux's documented
-occlusion policy, not a claim to reproduce Valve's unpublished implementation.
+On OLED, each channel has a three-reading temporal window whose individual
+samples expire after one second; the remaining fresh samples form its median.
+The preferred channel reports the brighter eligible median. If either sensor is
+unavailable or stale, it reports the healthy channel; if neither is valid, it
+reports an invalid sample. This is DeckLux's documented occlusion policy, not a
+claim to reproduce Valve's unpublished implementation.
 
 The evidence, conversion derivation, property contract, and failure behavior
 are documented in [docs/CALIBRATION.md](docs/CALIBRATION.md).

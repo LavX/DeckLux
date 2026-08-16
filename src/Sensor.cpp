@@ -245,6 +245,84 @@ PDLX_DRIVER_CONTEXT FusionContextForSensor(
     return driver == nullptr ? nullptr : DlxGetDriverContext(driver);
 }
 
+bool TryGetFusionPairKey(
+    _In_z_ const WCHAR* BiosName,
+    _Out_writes_(PairKeyCount) WCHAR* PairKey,
+    _In_ size_t PairKeyCount)
+{
+    if (BiosName == nullptr || PairKey == nullptr || PairKeyCount == 0)
+    {
+        return false;
+    }
+
+    PairKey[0] = L'\0';
+    const WCHAR* leaf = wcsrchr(BiosName, L'.');
+    if (leaf == nullptr || leaf == BiosName)
+    {
+        return false;
+    }
+
+    const size_t length = static_cast<size_t>(leaf - BiosName);
+    if (length >= PairKeyCount)
+    {
+        return false;
+    }
+
+    for (size_t index = 0; index < length; ++index)
+    {
+        PairKey[index] = BiosName[index];
+    }
+    PairKey[length] = L'\0';
+    return true;
+}
+
+void ResetFusionSamples(_Inout_ PDLX_FUSION_CHANNEL_STATE Channel)
+{
+    if (Channel == nullptr)
+    {
+        return;
+    }
+
+    for (std::uint32_t index = 0;
+         index < DLX_FUSION_WINDOW_SIZE;
+         ++index)
+    {
+        Channel->Samples[index] = 0.0f;
+        Channel->SampleTimesMs[index] = 0;
+    }
+    Channel->SampleCount = 0;
+    Channel->NextSampleIndex = 0;
+    Channel->Valid = false;
+}
+
+ULONG FusionRangeScalePpm(_In_ PDLX_SENSOR_CONTEXT Context)
+{
+    if (Context == nullptr || Context->Role != DLX_DEVICE_ROLE::Primary)
+    {
+        return Context == nullptr
+            ? DLX_CALIBRATION_SCALE_PPM_DEFAULT
+            : Context->CalibrationScalePpm;
+    }
+
+    PDLX_DRIVER_CONTEXT driverContext = FusionContextForSensor(Context);
+    if (driverContext == nullptr || driverContext->FusionLock == nullptr)
+    {
+        return Context->CalibrationScalePpm;
+    }
+
+    ULONG maximumScalePpm = Context->CalibrationScalePpm;
+    WdfWaitLockAcquire(driverContext->FusionLock, nullptr);
+    if (driverContext->Primary.OwnerDevice == Context->Device)
+    {
+        maximumScalePpm = DlxFusionMaximumScalePpm(
+            driverContext->Primary.CalibrationScalePpm,
+            driverContext->Secondary.OwnerDevice != nullptr,
+            driverContext->Secondary.CalibrationScalePpm);
+    }
+    WdfWaitLockRelease(driverContext->FusionLock);
+    return maximumScalePpm;
+}
+
 ULONG EffectiveSamplingInterval(_In_ PDLX_SENSOR_CONTEXT Context)
 {
     if (Context == nullptr)
@@ -288,18 +366,21 @@ void PublishFusionSample(
         return;
     }
 
+    const ULONGLONG sampleMs = GetTickCount64();
     WdfWaitLockAcquire(driverContext->FusionLock, nullptr);
     PDLX_FUSION_CHANNEL_STATE channel = FusionChannelForRole(
         driverContext,
         Context->Role);
     if (channel != nullptr &&
+        channel->OwnerDevice == Context->Device &&
         DlxFusionPushSample(
             channel->Samples,
+            channel->SampleTimesMs,
             &channel->SampleCount,
             &channel->NextSampleIndex,
-            Lux))
+            Lux,
+            sampleMs))
     {
-        channel->UpdatedAtMs = GetTickCount64();
         channel->Valid = true;
     }
     WdfWaitLockRelease(driverContext->FusionLock);
@@ -317,12 +398,9 @@ void InvalidateFusionSample(_Inout_ PDLX_SENSOR_CONTEXT Context)
     PDLX_FUSION_CHANNEL_STATE channel = FusionChannelForRole(
         driverContext,
         Context->Role);
-    if (channel != nullptr)
+    if (channel != nullptr && channel->OwnerDevice == Context->Device)
     {
-        channel->SampleCount = 0;
-        channel->NextSampleIndex = 0;
-        channel->UpdatedAtMs = 0;
-        channel->Valid = false;
+        ResetFusionSamples(channel);
     }
     WdfWaitLockRelease(driverContext->FusionLock);
 }
@@ -351,27 +429,25 @@ bool TryGetFusedLux(
     FLOAT secondaryLux = 0.0f;
 
     WdfWaitLockAcquire(driverContext->FusionLock, nullptr);
-    if (driverContext->Primary.Valid &&
-        DlxFusionSampleIsFresh(
-            nowMs,
-            driverContext->Primary.UpdatedAtMs) &&
-        driverContext->Primary.SampleCount > 0)
+    if (driverContext->Primary.OwnerDevice == Context->Device &&
+        driverContext->Primary.Valid)
     {
-        primaryLux = DlxFusionMedian(
+        primaryValid = DlxFusionFreshMedian(
             driverContext->Primary.Samples,
-            driverContext->Primary.SampleCount);
-        primaryValid = true;
-    }
-    if (driverContext->Secondary.Valid &&
-        DlxFusionSampleIsFresh(
+            driverContext->Primary.SampleTimesMs,
+            driverContext->Primary.SampleCount,
             nowMs,
-            driverContext->Secondary.UpdatedAtMs) &&
-        driverContext->Secondary.SampleCount > 0)
+            &primaryLux);
+    }
+    if (driverContext->Secondary.OwnerDevice != nullptr &&
+        driverContext->Secondary.Valid)
     {
-        secondaryLux = DlxFusionMedian(
+        secondaryValid = DlxFusionFreshMedian(
             driverContext->Secondary.Samples,
-            driverContext->Secondary.SampleCount);
-        secondaryValid = true;
+            driverContext->Secondary.SampleTimesMs,
+            driverContext->Secondary.SampleCount,
+            nowMs,
+            &secondaryLux);
     }
     WdfWaitLockRelease(driverContext->FusionLock);
 
@@ -610,6 +686,93 @@ NTSTATUS ServiceRecoveryAndFallback(
         ? recoveryStatus
         : STATUS_NO_DATA_DETECTED;
 }
+}
+
+NTSTATUS DlxRegisterFusionChannel(_Inout_ PDLX_SENSOR_CONTEXT Context)
+{
+    if (Context == nullptr)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (Context->Role == DLX_DEVICE_ROLE::Standalone)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    WCHAR pairKey[ARRAYSIZE(Context->BiosName)] = {};
+    if (!TryGetFusionPairKey(
+            Context->BiosName,
+            pairKey,
+            ARRAYSIZE(pairKey)))
+    {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    PDLX_DRIVER_CONTEXT driverContext = FusionContextForSensor(Context);
+    if (driverContext == nullptr || driverContext->FusionLock == nullptr)
+    {
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    NTSTATUS status = STATUS_SUCCESS;
+    WdfWaitLockAcquire(driverContext->FusionLock, nullptr);
+    PDLX_FUSION_CHANNEL_STATE channel = FusionChannelForRole(
+        driverContext,
+        Context->Role);
+    if (channel == nullptr ||
+        (channel->OwnerDevice != nullptr &&
+         channel->OwnerDevice != Context->Device) ||
+        (driverContext->FusionPairKey[0] != L'\0' &&
+         _wcsicmp(driverContext->FusionPairKey, pairKey) != 0))
+    {
+        status = STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+    else
+    {
+        if (driverContext->FusionPairKey[0] == L'\0')
+        {
+            (void)StringCchCopyW(
+                driverContext->FusionPairKey,
+                ARRAYSIZE(driverContext->FusionPairKey),
+                pairKey);
+        }
+        channel->OwnerDevice = Context->Device;
+        channel->CalibrationScalePpm = Context->CalibrationScalePpm;
+        ResetFusionSamples(channel);
+    }
+    WdfWaitLockRelease(driverContext->FusionLock);
+    return status;
+}
+
+VOID DlxUnregisterFusionChannel(_Inout_ PDLX_SENSOR_CONTEXT Context)
+{
+    if (Context == nullptr || Context->Role == DLX_DEVICE_ROLE::Standalone)
+    {
+        return;
+    }
+
+    PDLX_DRIVER_CONTEXT driverContext = FusionContextForSensor(Context);
+    if (driverContext == nullptr || driverContext->FusionLock == nullptr)
+    {
+        return;
+    }
+
+    WdfWaitLockAcquire(driverContext->FusionLock, nullptr);
+    PDLX_FUSION_CHANNEL_STATE channel = FusionChannelForRole(
+        driverContext,
+        Context->Role);
+    if (channel != nullptr && channel->OwnerDevice == Context->Device)
+    {
+        ResetFusionSamples(channel);
+        channel->OwnerDevice = nullptr;
+        channel->CalibrationScalePpm = 0;
+    }
+    if (driverContext->Primary.OwnerDevice == nullptr &&
+        driverContext->Secondary.OwnerDevice == nullptr)
+    {
+        driverContext->FusionPairKey[0] = L'\0';
+    }
+    WdfWaitLockRelease(driverContext->FusionLock);
 }
 
 NTSTATUS DlxInitializeSensorContext(
@@ -931,10 +1094,7 @@ NTSTATUS DlxInitializeSensorContext(
         list->List[DlxFieldRangeMaximum].Key =
             PKEY_SensorDataField_RangeMaximum;
         InitPropVariantFromFloat(
-            DlxLtrf216aMaximumLux(
-                Context->Role == DLX_DEVICE_ROLE::Primary
-                    ? DLX_CALIBRATION_SCALE_PPM_MAXIMUM
-                    : Context->CalibrationScalePpm),
+            DlxLtrf216aMaximumLux(Context->CalibrationScalePpm),
             &list->List[DlxFieldRangeMaximum].Value);
     }
 
@@ -1371,7 +1531,16 @@ NTSTATUS DlxEvtSensorGetDataFieldProperties(
         return STATUS_NOT_SUPPORTED;
     }
 
-    return CopyCollection(context->DataFieldProperties, Properties, Size);
+    WdfWaitLockAcquire(context->Lock, nullptr);
+    InitPropVariantFromFloat(
+        DlxLtrf216aMaximumLux(FusionRangeScalePpm(context)),
+        &context->DataFieldProperties->List[DlxFieldRangeMaximum].Value);
+    const NTSTATUS status = CopyCollection(
+        context->DataFieldProperties,
+        Properties,
+        Size);
+    WdfWaitLockRelease(context->Lock);
+    return status;
 }
 
 NTSTATUS DlxEvtSensorGetDataInterval(

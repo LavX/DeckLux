@@ -41,6 +41,9 @@ foreach ($requiredText in @(
     'SensorEventSubscription',
     'DEVPKEY_Device_BiosDeviceName',
     'IsValveGalileo',
+    '$boardMatches',
+    '$systemMatches -or $boardMatches',
+    '$identitiesConflict',
     "`$physicalSide = 'Left'",
     "`$physicalSide = 'Right'",
     "`$signalKind = 'PreferredFused'",
@@ -78,6 +81,9 @@ Assert-SensorComparisonTest `
 Assert-SensorComparisonTest `
     -Condition (-not $text.Contains('Valve Galileo DeviceId instance suffix')) `
     -Message 'a numeric instance suffix must not infer a physical side'
+Assert-SensorComparisonTest `
+    -Condition (-not $text.Contains('$boardContradicts')) `
+    -Message 'Galileo recognition must use the shared system-or-baseboard rule'
 
 $configureInterval = $text.IndexOf(
     '$entry.Sensor.ReportInterval = [uint32]$entry.EffectiveReportIntervalMs')

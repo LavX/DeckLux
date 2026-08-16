@@ -53,6 +53,10 @@ $readmeText = Get-Content -LiteralPath `
     (Join-Path $projectRoot 'README.md') -Raw
 $deviceText = Get-Content -LiteralPath `
     (Join-Path $projectRoot 'src\Device.cpp') -Raw
+$deviceHeaderText = Get-Content -LiteralPath `
+    (Join-Path $projectRoot 'src\Device.h') -Raw
+$sensorText = Get-Content -LiteralPath `
+    (Join-Path $projectRoot 'src\Sensor.cpp') -Raw
 
 Assert-DeckLuxReleaseTest `
     -Condition ($infText -match '(?m)^DriverVer\s*=\s*08/15/2026,1\.1\.0\.0\s*$') `
@@ -104,6 +108,21 @@ Assert-DeckLuxReleaseTest `
     -Condition ($deviceText -notmatch 'WdfDeviceAssignS0IdleSettings\s*\(' -and
         $deviceText -match 'BackgroundSampling') `
     -Message 'secondary background sampling respects SensorsCx power-policy ownership'
+Assert-DeckLuxReleaseTest `
+    -Condition ($deviceHeaderText -match 'OwnerDevice' -and
+        $deviceHeaderText -match 'FusionPairKey' -and
+        $deviceText -match 'DlxRegisterFusionChannel' -and
+        $sensorText -match 'STATUS_DEVICE_CONFIGURATION_ERROR') `
+    -Message 'fusion coordinator rejects duplicate roles and mismatched ACPI pairs'
+Assert-DeckLuxReleaseTest `
+    -Condition ($deviceHeaderText -match 'SampleTimesMs' -and
+        $sensorText -match 'DlxFusionFreshMedian' -and
+        $sensorText -notmatch 'UpdatedAtMs') `
+    -Message 'fusion median evaluates freshness for each stored sample'
+Assert-DeckLuxReleaseTest `
+    -Condition ($sensorText -match 'FusionRangeScalePpm' -and
+        $sensorText -notmatch '(?s)DlxFieldRangeMaximum.*DLX_CALIBRATION_SCALE_PPM_MAXIMUM') `
+    -Message 'range maximum derives from the registered sensor calibrations'
 
 $installText = Get-Content -LiteralPath `
     (Join-Path $projectRoot 'scripts\Install-DeckLux.ps1') -Raw
@@ -118,6 +137,10 @@ Assert-DeckLuxReleaseTest `
     -Condition ($installText -match '-IncludeSecondary cannot be combined with explicit -InstanceId' -and
         $installText -match '(?s)if \(\$hasExplicitInstance\) \{\s*if \(\$IncludeSecondary\) \{') `
     -Message 'explicit instance selection cannot be mixed with topology expansion'
+Assert-DeckLuxReleaseTest `
+    -Condition ($installText -match 'isCanonicalGalileoPair' -and
+        $installText -match 'Multi-device installation is limited to the canonical Steam Deck OLED LTRF/LTRS pair') `
+    -Message 'installer rejects multi-device topologies that the fusion singleton cannot represent'
 Assert-DeckLuxReleaseTest `
     -Condition ($installText -match 'BindingPreExisting' -and
         $installText -match 'BoundByInstaller' -and

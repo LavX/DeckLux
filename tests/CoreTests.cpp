@@ -190,14 +190,17 @@ int main()
         "future fusion sample rejected");
 
     float seededWindow[DLX_FUSION_WINDOW_SIZE] = {};
+    std::uint64_t seededTimes[DLX_FUSION_WINDOW_SIZE] = {};
     std::uint32_t seededCount = 0;
     std::uint32_t seededNext = 0;
     Check(
         DlxFusionPushSample(
             seededWindow,
+            seededTimes,
             &seededCount,
             &seededNext,
-            10.0f) &&
+            10.0f,
+            1000) &&
             seededCount == DLX_FUSION_WINDOW_SIZE &&
             seededNext == 0 &&
             NearlyEqual(DlxFusionMedian(seededWindow, seededCount), 10.0f),
@@ -205,33 +208,69 @@ int main()
     Check(
         DlxFusionPushSample(
             seededWindow,
+            seededTimes,
             &seededCount,
             &seededNext,
-            1000.0f) &&
+            1000.0f,
+            1100) &&
             seededNext == 1 &&
             NearlyEqual(DlxFusionMedian(seededWindow, seededCount), 10.0f),
         "seeded median rejects second-sample spike");
     Check(
         DlxFusionPushSample(
             seededWindow,
+            seededTimes,
             &seededCount,
             &seededNext,
-            12.0f) &&
+            12.0f,
+            1200) &&
         DlxFusionPushSample(
             seededWindow,
+            seededTimes,
             &seededCount,
             &seededNext,
-            14.0f) &&
+            14.0f,
+            1300) &&
             seededNext == 0 &&
             NearlyEqual(DlxFusionMedian(seededWindow, seededCount), 14.0f),
         "fusion window rotates across all three slots");
     Check(
         !DlxFusionPushSample(
             seededWindow,
+            seededTimes,
             &seededCount,
             &seededNext,
-            std::numeric_limits<float>::infinity()),
+            std::numeric_limits<float>::infinity(),
+            1400),
         "fusion window rejects non-finite sample");
+
+    const float expirySamples[DLX_FUSION_WINDOW_SIZE] =
+        { 10.0f, 10.0f, 100.0f };
+    const std::uint64_t expiryTimes[DLX_FUSION_WINDOW_SIZE] =
+        { 1000, 1000, 6000 };
+    float freshMedian = 0.0f;
+    Check(
+        DlxFusionFreshMedian(
+            expirySamples,
+            expiryTimes,
+            DLX_FUSION_WINDOW_SIZE,
+            6000,
+            &freshMedian) &&
+            NearlyEqual(freshMedian, 100.0f),
+        "fusion median excludes individually expired samples");
+    Check(
+        !DlxFusionFreshMedian(
+            expirySamples,
+            expiryTimes,
+            DLX_FUSION_WINDOW_SIZE,
+            7001,
+            &freshMedian),
+        "fusion median rejects a fully expired channel");
+    Check(
+        DlxFusionMaximumScalePpm(23000000, false, 31000000) == 23000000 &&
+        DlxFusionMaximumScalePpm(23000000, true, 21000000) == 23000000 &&
+        DlxFusionMaximumScalePpm(23000000, true, 31000000) == 31000000,
+        "fused range uses only registered channel calibrations");
     Check(
         DlxFusionSamplingInterval(true, 5000, 250) == 250 &&
             DlxFusionSamplingInterval(true, 100, 250) == 100 &&

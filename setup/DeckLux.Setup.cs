@@ -1135,6 +1135,65 @@ namespace DeckLux.Setup
             return (rights & dangerousRights) != 0;
         }
 
+        private static bool TryCanonicalDeckProduct(
+            string value,
+            out string canonicalProduct)
+        {
+            if (string.Equals(value, "Jupiter",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                canonicalProduct = "Jupiter";
+                return true;
+            }
+            if (string.Equals(value, "Galileo",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                canonicalProduct = "Galileo";
+                return true;
+            }
+
+            canonicalProduct = string.Empty;
+            return false;
+        }
+
+        private static string ResolveStatePlatformProduct(
+            Dictionary<string, object> platform)
+        {
+            string systemManufacturer =
+                GetStateString(platform, "SystemManufacturer");
+            string systemProduct =
+                GetStateString(platform, "SystemProductName");
+            string boardManufacturer =
+                GetStateString(platform, "BaseBoardManufacturer");
+            string boardProduct =
+                GetStateString(platform, "BaseBoardProduct");
+
+            string canonicalSystemProduct = string.Empty;
+            bool knownSystem =
+                string.Equals(systemManufacturer, "Valve",
+                    StringComparison.OrdinalIgnoreCase) &&
+                TryCanonicalDeckProduct(
+                    systemProduct, out canonicalSystemProduct);
+            string canonicalBoardProduct = string.Empty;
+            bool knownBoard =
+                string.Equals(boardManufacturer, "Valve",
+                    StringComparison.OrdinalIgnoreCase) &&
+                TryCanonicalDeckProduct(
+                    boardProduct, out canonicalBoardProduct);
+
+            if (knownSystem && knownBoard &&
+                !string.Equals(canonicalSystemProduct, canonicalBoardProduct,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "DeckLux state contains conflicting Valve platform identities.");
+            }
+
+            return knownSystem
+                ? canonicalSystemProduct
+                : (knownBoard ? canonicalBoardProduct : string.Empty);
+        }
+
         private static string GetStateDeckProduct(
             Dictionary<string, object> platform,
             int schemaVersion)
@@ -1144,22 +1203,15 @@ namespace DeckLux.Setup
                 return string.Empty;
             }
 
-            string deckProduct = GetStateString(platform, "DeckProduct");
-            string manufacturer = GetStateString(platform, "SystemManufacturer");
-            string productName = GetStateString(platform, "SystemProductName");
+            string recordedProduct = GetStateString(platform, "DeckProduct");
+            string resolvedProduct = ResolveStatePlatformProduct(platform);
 
-            if (string.IsNullOrEmpty(deckProduct) && schemaVersion < 3 &&
-                string.Equals(manufacturer, "Valve",
-                    StringComparison.OrdinalIgnoreCase) &&
-                (string.Equals(productName, "Jupiter",
-                    StringComparison.OrdinalIgnoreCase) ||
-                 string.Equals(productName, "Galileo",
-                    StringComparison.OrdinalIgnoreCase)))
+            if (string.IsNullOrEmpty(recordedProduct) && schemaVersion < 3)
             {
-                deckProduct = productName;
+                recordedProduct = resolvedProduct;
             }
 
-            if (string.IsNullOrEmpty(deckProduct))
+            if (string.IsNullOrEmpty(recordedProduct))
             {
                 if (schemaVersion == 3)
                 {
@@ -1169,18 +1221,15 @@ namespace DeckLux.Setup
                 return string.Empty;
             }
 
-            if (!string.Equals(deckProduct, "Jupiter", StringComparison.Ordinal) &&
-                !string.Equals(deckProduct, "Galileo", StringComparison.Ordinal))
+            string deckProduct;
+            if (!TryCanonicalDeckProduct(recordedProduct, out deckProduct))
             {
                 throw new InvalidDataException(
                     "DeckLux state identifies an unsupported product.");
             }
-            if ((!string.IsNullOrEmpty(manufacturer) &&
-                 !string.Equals(manufacturer, "Valve",
-                     StringComparison.OrdinalIgnoreCase)) ||
-                (!string.IsNullOrEmpty(productName) &&
-                 !string.Equals(productName, deckProduct,
-                     StringComparison.OrdinalIgnoreCase)))
+            if (string.IsNullOrEmpty(resolvedProduct) ||
+                !string.Equals(resolvedProduct, deckProduct,
+                    StringComparison.Ordinal))
             {
                 throw new InvalidDataException(
                     "DeckLux state contains contradictory platform identity.");
